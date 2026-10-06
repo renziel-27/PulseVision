@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="100%" height="100%">
+  <defs>
+    <!-- Background Radial Glow -->
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff2a6d" stop-opacity="0.35"/>
+      <stop offset="40%" stop-color="#720026" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#080c14" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Myocardial Muscle Gradient -->
+    <linearGradient id="muscleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff3366"/>
+      <stop offset="35%" stop-color="#d90429"/>
+      <stop offset="70%" stop-color="#900c3f"/>
+      <stop offset="100%" stop-color="#4a001f"/>
+    </linearGradient>
+
+    <!-- Aorta Arch Gradient (Oxygenated) -->
+    <linearGradient id="aortaGrad" x1="0%" y1="0%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#ff4d6d"/>
+      <stop offset="50%" stop-color="#c9184a"/>
+      <stop offset="100%" stop-color="#800f2f"/>
+    </linearGradient>
+
+    <!-- Vena Cava / Pulmonary Artery (Deoxygenated Blue) -->
+    <linearGradient id="venaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="50%" stop-color="#0077b6"/>
+      <stop offset="100%" stop-color="#023e8a"/>
+    </linearGradient>
+
+    <!-- Neon Glow Filter -->
+    <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="intenseGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16" result="blur2"/>
+      <feGaussianBlur stdDeviation="6" result="blur1"/>
+      <feMerge>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .beating-heart-group {
+      transform-origin: 300px 300px;
+      animation: heartSystole 1.1s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+    .vascular-glow {
+      animation: pulseVessels 2.2s ease-in-out infinite alternate;
+    }
+    .particle-swirl {
+      animation: rotateParticles 18s linear infinite;
+      transform-origin: 300px 300px;
+    }
+    @keyframes heartSystole {
+      0% { transform: scale(0.96); }
+      12% { transform: scale(1.08); }
+      24% { transform: scale(0.98); }
+      36% { transform: scale(1.04); }
+      60% { transform: scale(0.96); }
+      100% { transform: scale(0.96); }
+    }
+    @keyframes pulseVessels {
+      0% { stroke-opacity: 0.4; filter: drop-shadow(0 0 4px #00f0ff); }
+      100% { stroke-opacity: 1; filter: drop-shadow(0 0 12px #00f0ff); }
+    }
+    @keyframes rotateParticles {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  </style>
+
+  <!-- Ambient Backdrop -->
+  <rect width="600" height="600" fill="transparent"/>
+  <circle cx="300" cy="300" r="260" fill="url(#bgGlow)"/>
+
+  <!-- Orbiting Vital Bio-Particles -->
+  <g class="particle-swirl" opacity="0.75">
+    <circle cx="150" cy="180" r="3.5" fill="#00f0ff" filter="url(#neonGlow)"/>
+    <circle cx="460" cy="200" r="4.5" fill="#ff2a6d" filter="url(#neonGlow)"/>
+    <circle cx="440" cy="420" r="3" fill="#00ff9d" filter="url(#neonGlow)"/>
+    <circle cx="170" cy="430" r="4" fill="#00f0ff" filter="url(#neonGlow)"/>
+    <circle cx="300" cy="100" r="3" fill="#ff2a6d" filter="url(#neonGlow)"/>
+    <circle cx="300" cy="510" r="3.5" fill="#9d4edd" filter="url(#neonGlow)"/>
+  </g>
+
+  <!-- Animated Beating Heart -->
+  <g class="beating-heart-group">
+
+    <!-- Superior Vena Cava (Right Atrium Inflow) -->
+    <path d="M 370 120 C 370 160 365 200 360 230 C 340 235 330 220 340 180 C 345 140 345 120 370 120 Z" fill="url(#venaGrad)"/>
+
+    <!-- Pulmonary Trunk (Artery to Lungs) -->
+    <path d="M 270 170 C 250 140 230 130 200 140 C 210 170 230 190 260 215 C 285 200 285 180 270 170 Z" fill="url(#venaGrad)"/>
+
+    <!-- Aorta Arch -->
+    <path d="M 280 240 C 270 170 290 110 340 100 C 390 90 410 140 395 190 C 380 220 360 245 340 250 Z" fill="url(#aortaGrad)" filter="url(#neonGlow)"/>
+    
+    <!-- 3 Aortic Arch Branches (Brachiocephalic, Carotid, Subclavian) -->
+    <path d="M 320 105 L 315 70 Q 323 68 330 70 L 333 103 Z" fill="url(#aortaGrad)"/>
+    <path d="M 342 98 L 342 62 Q 350 60 357 62 L 354 98 Z" fill="url(#aortaGrad)"/>
+    <path d="M 366 100 L 372 68 Q 380 69 385 73 L 378 107 Z" fill="url(#aortaGrad)"/>
+
+    <!-- Main Ventricular Mass (Left + Right Ventricles & Apex) -->
+    <path d="M 300 210 
+             C 380 180, 450 240, 440 330 
+             C 430 410, 360 480, 300 520 
+             C 240 480, 170 410, 160 330 
+             C 150 240, 220 180, 300 210 Z" 
+          fill="url(#muscleGrad)" 
+          stroke="#ff2a6d" 
+          stroke-width="3"
+          filter="url(#neonGlow)"/>
+
+    <!-- Left Ventricle Muscular Shading Contour -->
+    <path d="M 300 215 C 360 250 410 320 395 400 C 375 460 330 495 300 520 C 290 480 280 380 300 215 Z" fill="#3a0016" opacity="0.45"/>
+
+    <!-- Glowing Coronary Arteries (Vascular Network) -->
+    <g class="vascular-glow" fill="none" stroke-linecap="round">
+      <!-- Left Anterior Descending Artery (LAD) -->
+      <path d="M 295 240 Q 285 290 290 350 T 285 430 T 295 500" stroke="#00f0ff" stroke-width="3.5"/>
+      <path d="M 288 310 Q 250 330 220 350" stroke="#00f0ff" stroke-width="2"/>
+      <path d="M 290 360 Q 260 390 235 410" stroke="#00f0ff" stroke-width="1.8"/>
+      <path d="M 287 410 Q 265 440 250 460" stroke="#00f0ff" stroke-width="1.5"/>
+
+      <!-- Right Coronary Artery (RCA) -->
+      <path d="M 335 245 Q 380 280 390 340 T 360 430 T 310 490" stroke="#ff2a6d" stroke-width="3"/>
+      <path d="M 370 290 Q 405 310 425 335" stroke="#ff2a6d" stroke-width="2"/>
+      <path d="M 380 350 Q 405 380 415 410" stroke="#ff2a6d" stroke-width="1.8"/>
+    </g>
+
+    <!-- Anatomical Highlight Reflections -->
+    <path d="M 200 270 C 185 310 185 360 205 395" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.3" filter="url(#neonGlow)"/>
+    <path d="M 315 125 C 340 115 365 125 375 145" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
+
+  </g>
+</svg>

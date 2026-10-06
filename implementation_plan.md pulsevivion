@@ -1,0 +1,187 @@
+# PulseVision: AI-Powered Non-Contact Heart Rate & Health Assessment System
+
+PulseVision is an end-to-end AI-based remote Photoplethysmography (**rPPG**) physiological monitoring and health-assessment platform. It extracts subtle blood-volume micro-color variations from facial video in real-time to compute heart rate in beats per minute (BPM), estimate stress and fatigue (via Eye Aspect Ratio and blink dynamics), and deliver structured health reports with SMS dispatch and smartwatch accuracy validation.
+
+---
+
+## System Architecture Overview
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │                         PulseVision Web Interface                           │
+ │  ┌─────────────────────────┐  ┌──────────────────────────────────────────┐  │
+ │  │ 3D Realistic Heart      │  │ Real-time Scanning Dashboard             │  │
+ │  │ (Three.js WebGL Engine) │  │  - Face Landmark & Multi-ROI Tracking    │  │
+ │  │ - Beats synced to BPM   │  │  - Real-time rPPG Waveform (Canvas)      │  │
+ │  │ - Dynamic ECG Stream    │  │  - Live Signal Quality Index (SQI)       │  │
+ │  └─────────────────────────┘  └──────────────────────────────────────────┘  │
+ │  ┌─────────────────────────┐  ┌────────────────────┐  ┌──────────────────┐  │
+ │  │ Smartwatch Benchmark    │  │ Stress & Fatigue   │  │ SMS Health       │  │
+ │  │ Validation Suite        │  │ Assessment Engine  │  │ Report Generator │  │
+ │  └─────────────────────────┘  └────────────────────┘  └──────────────────┘  │
+ └──────────────────────────────────────┬──────────────────────────────────────┘
+                                        │ WebSocket / REST API
+ ┌──────────────────────────────────────▼──────────────────────────────────────┐
+ │                           Python Flask Backend API                          │
+ │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ │  │ Computer Vision & Signal Pre-Flight Engine                            │  │
+ │  │  - OpenCV + MediaPipe Face Mesh Detection                             │  │
+ │  │  - Multi-ROI Extractor (Forehead, Left Cheek, Right Cheek)            │  │
+ │  │  - Pre-flight Guards: Luminance Check, Face Stability, Distance Check │  │
+ │  │  - Fatigue Analyzer: 6-point Eye Aspect Ratio (EAR) & Blink Rate      │  │
+ │  └───────────────────────────────────────────────────────────────────────┘  │
+ │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ │  │ Dual rPPG Estimation Pipeline                                         │  │
+ │  │  1. Signal Processing: CHROM, POS, Green-rPPG, Butterworth Bandpass   │  │
+ │  │     (0.75 - 3.5 Hz), FFT Power Spectral Density & Welch Peak Finding  │  │
+ │  │  2. Deep Learning Model: PyTorch Spatial-Temporal TSCAN Architecture  │  │
+ │  │     trained on rPPG dataset with MAE, RMSE, Pearson r benchmarks      │  │
+ │  └───────────────────────────────────────────────────────────────────────┘  │
+ │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ │  │ Application & Communication Services                                  │  │
+ │  │  - User Auth (Registration, Phone Number validation, Session)         │  │
+ │  │  - SMS Dispatch Service (Twilio API + Simulated Dispatch Logger)      │  │
+ │  │  - Smartwatch Accuracy Validation & Benchmark Analytics Store         │  │
+ │  └───────────────────────────────────────────────────────────────────────┘  │
+ └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **SMS Dispatch Service**: The system includes direct SMS dispatch integration. You can plug in your Twilio / SMS provider credentials in `.env`, or use the built-in simulated SMS gateway, which logs and visually displays incoming SMS dispatches in real-time in the application drawer.
+>
+> **Research Prototype Disclaimer**: PulseVision will prominently present clear medical disclaimers on all pages and generated reports: *"Research and monitoring prototype only. Not a medical diagnostic device."*
+
+---
+
+## Proposed Changes
+
+### Backend Components (`/backend`)
+
+#### [NEW] [`backend/app.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/app.py)
+- Flask API server with endpoints for:
+  - `/api/auth/register`, `/api/auth/login`, `/api/auth/user`
+  - `/api/process-frame` (real-time video frame processing with ROI extraction, lighting/stability checks)
+  - `/api/estimate-rppg` (dual-mode: CHROM/POS signal processing vs PyTorch Deep Learning TSCAN)
+  - `/api/fatigue-stress` (computes Eye Aspect Ratio, blink frequency, and pulse variability stress index)
+  - `/api/send-sms` (SMS dispatch of health report summary to registered phone number)
+  - `/api/validation/trials` (stores & calculates accuracy stats: MAE, RMSE, Pearson correlation vs smartwatch)
+  - `/api/reports` (persisting and fetching previous health scans)
+
+#### [NEW] [`backend/rppg_engine.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/rppg_engine.py)
+- **Computer Vision ROI Extraction**: Forehead, Left Cheek, Right Cheek bounding coordinates from MediaPipe/OpenCV landmarks.
+- **Signal Pre-Processing**: RGB temporal signal buffer, detrending, normalized color differences.
+- **Classical rPPG Methods**:
+  - **POS (Plane-Orthogonal-to-Skin)**: Projection of skin color signals on orthogonal planes to eliminate specular reflection and motion artifacts.
+  - **CHROM (Chrominance method)**: Linear combination of chrominance signals $3R - 2G$ and $1.5R + G - 1.5B$ with adaptive ratio weighting.
+  - **Green Channel Filtering**: Peak detection benchmark.
+- **Filtering & Spectral Analysis**:
+  - 4th-order Butterworth bandpass filter (0.75 Hz to 3.5 Hz $\rightarrow$ 45 to 210 BPM).
+  - Fast Fourier Transform (FFT) Power Spectral Density with Welch PSD estimation.
+  - Signal-to-Noise Ratio (SNR) and Signal Quality Index (SQI) scoring.
+  - **Low Signal Quality Rejection Filter**: Drops noisy frames/scans and outputs *"Low signal quality. Please remain still and face the camera."*
+
+#### [NEW] [`backend/model.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/model.py)
+- PyTorch **TSCAN** (Temporal Convolutional Attention Network) / 1D-CNN + Spatial-Temporal Attention architecture for pulse extraction from multi-ROI color time series.
+- Model serialization and loading logic (`models/rppg_tscan_best.pth`).
+
+#### [NEW] [`backend/train_rppg.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/train_rppg.py)
+- Training, validation, and testing dataset pipeline.
+- Synthetic and physiological rPPG dataset generator / loader.
+- Metrics evaluation computation:
+  - **MAE** (Mean Absolute Error)
+  - **RMSE** (Root Mean Squared Error)
+  - **Pearson Correlation ($r$)**
+- Checkpoint saving to `backend/models/`.
+
+#### [NEW] [`backend/fatigue_stress.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/fatigue_stress.py)
+- **Eye Aspect Ratio (EAR)** calculation on 6 key landmark points per eye:
+  $$\text{EAR} = \frac{\|p_2 - p_6\| + \|p_3 - p_5\|}{2 \cdot \|p_1 - p_4\|}$$
+- Blink rate detector and PERCLOS (percentage of eye closure time).
+- Heart rate variability (HRV) time-domain proxy + micro-facial motion variance for stress index scoring (0 - 100).
+
+#### [NEW] [`backend/sms_service.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/sms_service.py)
+- Handles SMS message construction with emoji classification (😊 Normal, ⚠️ Warning).
+- Supports Twilio API credentials or fallback to an in-memory/disk message dispatcher log.
+
+#### [NEW] [`backend/database.py`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/backend/database.py)
+- SQLite database schema for Users, Scan History, Health Reports, and Smartwatch Validation Trials.
+
+---
+
+### Frontend Components (`/frontend` or root static serving)
+
+#### [NEW] [`frontend/index.html`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/frontend/index.html)
+- Single Page Application with clean section routing:
+  - **Hero Landing Page**: Futuristic branding, 3D anatomical beating heart hero, dynamic ECG graph, Call-to-Action buttons (**Get Started, Sign In, Register**).
+  - **Auth Modal / View**: Registration (Name, Username/Email, Password, numeric-only Phone Number) and Sign In.
+  - **Main Dashboard**:
+    - Live Camera Feed with toggleable landmark mesh and Forehead/Cheek ROI highlights.
+    - Pre-flight quality checklist (Luminance, Face centered, Stability score).
+    - Live rPPG waveform visualizer (Canvas glowing oscilloscope).
+    - Signal Quality Index (SQI) gauge with rejection warnings.
+    - Live BPM gauge synced with interactive 3D Heart beat rate.
+    - Algorithm switch: **POS**, **CHROM**, or **TSCAN Deep Learning Model**.
+    - Stress & Fatigue indicators (EAR, Blink count, PERCLOS, Stress level).
+  - **Health Assessment & Report View**:
+    - Result classification with friendly emojis (😊 Normal range 60-100 BPM, ⚠️ Low/High alerts).
+    - Interactive health recommendations and summary card.
+    - **"Send SMS Summary"** button to dispatch instant SMS to registered phone.
+    - Export / Print Health Report PDF.
+  - **Smartwatch Accuracy Validation Suite**:
+    - Live comparison trial recorder (Smartwatch Reference BPM vs PulseVision BPM).
+    - Test condition selector (Resting, Post-exercise, Dim Light, Normal Light, Movement, Distance).
+    - Statistical computation: MAE, RMSE, Pearson Correlation $r$.
+    - Interactive comparison table and scatter chart ($y = x$ correlation line).
+    - CSV/JSON dataset export for research papers.
+  - **SMS Simulation Drawer**: Live drawer showing received SMS notifications on the user's phone.
+
+#### [NEW] [`frontend/css/style.css`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/frontend/css/style.css)
+- Sleek futuristic cyber-medical design system:
+  - Deep space dark background (`#080d19`) with glowing cyan (`#00f0ff`), emerald (`#10b981`), crimson (`#ff3366`), and purple (`#8b5cf6`) accents.
+  - Glassmorphic panels with backdrop filters and crisp borders.
+  - Google Fonts: *Outfit*, *Space Grotesk*, and *JetBrains Mono*.
+  - Smooth micro-animations, pulse glow effects, and responsive layout.
+
+#### [NEW] [`frontend/js/heart3d.js`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/frontend/js/heart3d.js)
+- Three.js WebGL 3D realistic beating heart model:
+  - Custom procedural 3D anatomical heart geometry with ventricular/atrial pulsating deformation shader.
+  - Real-time beat expansion-contraction animation dynamically tuned to the user's estimated BPM in real time (e.g. 72 BPM $\rightarrow$ 1.2 Hz pulse).
+  - Arterial flow particle effects and emissive pulse waves.
+
+#### [NEW] [`frontend/js/app.js`](file:///c:/Users/ASUS/OneDrive/文件/Desktop/PULSEVISION-AI%20HEART%20MONITORING%20SYSTEM/frontend/js/app.js)
+- Core client logic:
+  - Webcam capture and client-side face detection/stream pipe.
+  - Pre-flight quality verification before scan trigger.
+  - Live Canvas rPPG waveform rendering and ECG animation.
+  - State management for User, Scans, Live Sensors, and Validation Experiments.
+  - Smartwatch validation trial runner and statistics calculator.
+  - SMS trigger and notification toast system.
+
+---
+
+## Verification Plan
+
+### Automated & Backend Tests
+1. **Model & rPPG Algorithm Test (`test_pipeline.py`)**:
+   - Verify POS, CHROM, and Butterworth bandpass filtering on synthetic and real skin color streams.
+   - Run PyTorch TSCAN model inference and evaluate MAE/RMSE calculations.
+   - Run training evaluation script to verify convergence and metrics logging.
+2. **Fatigue & Stress Test**:
+   - Verify EAR calculation across closed/open eye landmark coordinates.
+3. **SMS & Validation DB Test**:
+   - Verify user registration with strict numeric phone validation.
+   - Verify SMS dispatch logging and trial statistics computation.
+
+### Manual Verification in Browser Subagent
+1. Launch Flask server (`python backend/app.py`).
+2. Open browser to `http://localhost:5000`.
+3. Test landing page aesthetics, 3D beating heart, and dynamic ECG animation.
+4. Test user registration with phone number validation and login flow.
+5. Test webcam feed, ROI extraction, pre-flight lighting/stability checks, live rPPG waveform, and BPM estimation.
+6. Verify low signal quality rejection message ("Low signal quality. Please remain still...").
+7. Test Smartwatch Accuracy Validation Suite: enter reference BPMs, compute MAE & RMSE, verify chart.
+8. Trigger SMS health summary and inspect received message.

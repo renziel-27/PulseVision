@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PulseVision AI | Non-Contact Heart Monitoring & Health Assessment</title>
+  <meta name="description" content="AI-based contactless heart-rate monitoring and physiological health assessment using webcam remote Photoplethysmography (rPPG), deep learning, and empirical reference validation.">
+  
+  <meta name="theme-color" content="#EEF7FF">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PulseVision">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="assets/heart_3d_banner.svg">
+  
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <script>
+    // Force purge service worker and cache storage so UI updates immediately
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        for (var i = 0; i < regs.length; i++) {
+          regs[i].unregister();
+        }
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function(names) {
+        for (var i = 0; i < names.length; i++) caches.delete(names[i]);
+      });
+    }
+  </script>
+
+  <!-- Three.js CDN for 3D Heart -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="css/style.css?v=5.0.0-light-liquid">
+</head>
+<body>
+
+  <!-- Clinical Research Disclaimer Strip -->
+  <div class="disclaimer-strip">
+    <span>🛡️</span>
+    <span><strong>RESEARCH & MONITORING PROTOTYPE:</strong> PulseVision is an experimental rPPG physiological assessment tool and is NOT a certified medical diagnostic device.</span>
+  </div>
+
+  <!-- =========================================================================
+       MAIN TOP NAVIGATION — UNIFIED MEDICAL-AI HEADER
+       ========================================================================= -->
+  <header class="top-nav-wall">
+    <div class="header-inner">
+
+      <!-- Left Side: Integrated PulseVision Logo -->
+      <div class="brand-unit" data-view="landing" title="PulseVision AI Overview">
+        <div class="brand-heart-icon">
+          <span style="font-size: 1.15rem; line-height: 1;">❤️</span>
+        </div>
+        <div class="brand-label-group">
+          <span class="brand-name">Pulse<span class="brand-highlight">Vision</span></span>
+          <span class="brand-version-pill">AI 2.0</span>
+        </div>
+      </div>
+
+      <!-- Center: Exactly Four Connected Navigation Blocks -->
+      <nav class="nav-blocks-wall" aria-label="Main Navigation">
+        <a href="#overview" class="nav-block active" data-view="landing" title="System Overview & Beating Heart">
+          <span class="nav-block-icon">📊</span>
+          <span class="nav-block-label">Overview</span>
+        </a>
+        <a href="#scan" class="nav-block" data-view="dashboard" title="Live Non-Contact rPPG Scan">
+          <span class="nav-block-icon">📷</span>
+          <span class="nav-block-label">Live Scan</span>
+        </a>
+        <a href="#validation" class="nav-block" data-view="validation" title="Reference Standard Accuracy Validation">
+          <span class="nav-block-icon">🔬</span>
+          <span class="nav-block-label">Reference Validation</span>
+        </a>
+        <a href="#reports" class="nav-block" data-view="reports" title="Clinical Health Reports & Archive">
+          <span class="nav-block-icon">📄</span>
+          <span class="nav-block-label">Health Reports</span>
+        </a>
+      </nav>
+
+      <!-- Right Side: Unified Profile / Auth Control -->
+      <div class="header-right-zone">
+        <!-- Logged Out Sign In Button -->
+        <button id="btn-header-signin" class="btn-signin-matte" style="display: none;" title="Sign in to your PulseVision account">
+          <span class="btn-signin-icon">🔑</span>
+          <span>Sign In</span>
+        </button>
+
+        <!-- Logged In Unified Profile Trigger & Dropdown -->
+        <div class="profile-menu-container" id="profile-menu-container">
+          <button id="btn-profile-trigger" class="profile-trigger-block" aria-expanded="false" aria-haspopup="true" title="User Account & Demographics">
+            <span class="profile-avatar-circle">👤</span>
+            <span class="profile-name-text" id="header-user-name">Renziel Fernandez</span>
+            <span class="profile-caret">▾</span>
+          </button>
+
+          <!-- Matte Profile Dropdown Panel -->
+          <div id="profile-dropdown-panel" class="profile-dropdown-panel">
+            <div class="profile-dropdown-header">
+              <div class="dropdown-avatar">👤</div>
+              <div class="dropdown-user-info">
+                <div class="dropdown-user-name" id="dropdown-user-name">Renziel Fernandez</div>
+                <div class="dropdown-user-email" id="dropdown-user-email">renzielfernandez7@gmail.com</div>
+              </div>
+            </div>
+
+            <div class="profile-demographics-strip" id="dropdown-demographics-strip">
+              <div class="demographic-item">
+                <span class="demographic-lbl">Age</span>
+                <span class="demographic-val" id="dropdown-user-age">22 yrs</span>
+              </div>
+              <div class="demographic-item">
+                <span class="demographic-lbl">Gender</span>
+                <span class="demographic-val" id="dropdown-user-gender">Male</span>
+              </div>
+              <div class="demographic-item">
+                <span class="demographic-lbl">Phone</span>
+                <span class="demographic-val" id="dropdown-user-phone">8105911027</span>
+              </div>
+            </div>
+
+            <div class="profile-dropdown-divider"></div>
+
+            <div class="profile-dropdown-actions">
+              <button class="dropdown-action-btn" id="btn-dropdown-view-profile">
+                <span class="action-icon">👤</span>
+                <span>User Profile & Demographics</span>
+              </button>
+              <button class="dropdown-action-btn" id="btn-dropdown-insights">
+                <span class="action-icon">⚙️</span>
+                <span>System Insights & Architecture</span>
+              </button>
+              <button class="dropdown-action-btn" id="btn-dropdown-settings" style="display: none;">
+                <span class="action-icon">⚙️</span>
+                <span>Account Settings</span>
+              </button>
+              <div class="profile-dropdown-divider"></div>
+              <button class="dropdown-action-btn logout-action" id="btn-dropdown-logout">
+                <span class="action-icon">🔐</span>
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mobile Menu Toggle Button -->
+        <button id="btn-mobile-nav-toggle" class="btn-mobile-nav" aria-label="Toggle navigation menu">
+          <span>☰</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Mobile Nav Drawer -->
+    <div id="mobile-nav-drawer" class="mobile-nav-drawer">
+      <a href="#overview" class="mobile-nav-link active" data-view="landing"><span>📊</span> Overview</a>
+      <a href="#scan" class="mobile-nav-link" data-view="dashboard"><span>📷</span> Live Scan</a>
+      <a href="#validation" class="mobile-nav-link" data-view="validation"><span>🔬</span> Reference Validation</a>
+      <a href="#reports" class="mobile-nav-link" data-view="reports"><span>📄</span> Health Reports</a>
+      <a href="#profile" class="mobile-nav-link" data-view="profile"><span>👤</span> User Profile</a>
+    </div>
+  </header>
+
+  <!-- Main Application Wrapper -->
+  <main class="main-content">
+
+    <!-- =========================================================================
+         VIEW 1: LANDING & HERO (Original Beating Heart Design)
+         ========================================================================= -->
+    <section id="view-landing" class="view-section active">
+      <div class="hero-grid">
+        <div class="hero-text">
+          <div class="pulse-indicator-badge badge-normal" style="margin-bottom: 1.25rem; font-size: 0.85rem;">
+            <span>✨</span> Remote Photoplethysmography (rPPG) & Deep Learning
+          </div>
+          <h1 id="hero-user-greeting">
+            Contactless <span class="gradient-text">Heart Monitoring</span> & AI Health Assessment
+          </h1>
+          <p class="hero-subtitle">
+            PulseVision captures facial video through your webcam, accurately analyzes the <strong>forehead skin region</strong> to extract micro-vascular blood volume pulses, estimates your live heart rate, and analyzes eye blinks and ocular fatigue.
+          </p>
+
+          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <button id="btn-get-started" class="btn btn-primary" style="padding: 0.85rem 1.85rem; font-size: 1rem;">
+              <span>🚀</span> Start Health Scan
+            </button>
+            <button id="btn-hero-learn-more" class="btn btn-outline" style="padding: 0.85rem 1.5rem;">
+              <span>📊</span> Reference Validation
+            </button>
+          </div>
+
+          <div class="hero-stats-row">
+            <div>
+              <div class="stat-metric">&lt; 2.5 BPM</div>
+              <div class="stat-label">Reference MAE Error</div>
+            </div>
+            <div>
+              <div class="stat-metric">Forehead</div>
+              <div class="stat-label">rPPG ROI Isolation</div>
+            </div>
+            <div>
+              <div class="stat-metric">Live EAR</div>
+              <div class="stat-label">Blink & Redness</div>
+            </div>
+            <div>
+              <div class="stat-metric">Email &amp; PDF</div>
+              <div class="stat-label">Report Export</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Realistic Anatomical Human Heart Floating in Cinematic Environment -->
+        <div class="hero-floating-cardiac-zone">
+          <div class="cardiac-cinematic-stage">
+            <!-- Subtle Atmospheric Depth Illumination Behind Floating Heart -->
+            <div class="cardiac-atmospheric-glow"></div>
+            <div class="cardiac-ambient-haze"></div>
+
+            <!-- ECG Rhythm Signal Flowing Organically Behind the Floating Heart -->
+            <div class="cardiac-ecg-backdrop-wrap">
+              <canvas id="ecg-mini-canvas" class="cardiac-ecg-canvas" width="460" height="90"></canvas>
+            </div>
+
+            <!-- Photorealistic Anatomical Human Heart (Floating) -->
+            <div class="cardiac-anatomical-anchor">
+              <img src="assets/anatomical_heart.png?v=4.2.0" alt="Realistic Anatomical Human Heart Model" class="cardiac-anatomical-img" id="hero-anatomical-heart" />
+            </div>
+
+            <!-- Floating Translucent Liquid Telemetry Capsule -->
+            <div class="cardiac-floating-telemetry">
+              <span class="cardiac-live-beacon"></span>
+              <span class="cardiac-live-val" id="hero-bpm-live">72 BPM</span>
+              <span class="cardiac-live-tag">Biological Rhythm</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Unified Flowing Liquid Feature Wall (Clear Water Treatment) -->
+      <div class="overview-features-wall">
+        <div class="overview-feature-column">
+          <div class="feature-water-badge">🎯</div>
+          <h3>Forehead-Isolated rPPG</h3>
+          <p>
+            Evaluates microvascular subcutaneous hemoglobin flux in the forehead capillary bed with dynamic skin-tone normalization.
+          </p>
+        </div>
+        <div class="overview-feature-column">
+          <div class="feature-water-badge">🧠</div>
+          <h3>TS-CAN Deep Learning Model</h3>
+          <p>
+            Temporal convolutional neural network with spatial-temporal self-attention, trained on multi-spectral facial absorption data.
+          </p>
+        </div>
+        <div class="overview-feature-column">
+          <div class="feature-water-badge">👁️</div>
+          <h3>Real Eye Blink &amp; Sclera Redness</h3>
+          <p>
+            Computes real-time Eye Aspect Ratio (EAR) per blink, monitors blink periodicity, and evaluates sclera micro-vascular redness percentage.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================================
+         VIEW 2: LIVE SCAN DASHBOARD
+         ========================================================================= -->
+    <section id="view-dashboard" class="view-section">
+      <!-- Title & Workflow Progression Header -->
+      <div class="scan-page-header" style="margin-bottom: 1.25rem;">
+        <div>
+          <h2 style="font-size: 1.8rem;">Non-Contact rPPG <span class="gradient-text">Live Scan</span></h2>
+          <p style="font-size: 0.88rem; color: var(--text-secondary);">Real-time facial video acquisition & 5-algorithm consensus physiological assessment.</p>
+        </div>
+      </div>
+
+      <!-- Unified Session Progression Bar -->
+      <div class="trial-status-strip">
+        <div class="trial-info-group">
+          <span style="font-size: 0.82rem; color: var(--text-muted); font-weight: 700;">STATUS:</span>
+          <span id="trial-state-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.82rem; font-weight: 700;">READY TO SCAN</span>
+          <span id="trial-uid-badge" class="pulse-indicator-badge" style="font-family: var(--font-mono); font-size: 0.8rem; background: rgba(235, 243, 255, 0.8); color: #1d4ed8;">PV-SCAN-LIVE</span>
+        </div>
+        <div class="trial-info-group">
+          <span id="trial-countdown-badge" class="trial-countdown-badge">⏱ Time: 00s / 45s</span>
+          <div class="progress-bar-wrap" style="width: 140px; height: 8px;">
+            <div id="trial-progress-bar" class="progress-bar-fill fill-emerald" style="width: 0%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Scan Workspace: Left Camera | Right Measurement -->
+      <div class="dashboard-grid">
+        
+        <!-- Left Column: Video Stream & Focus Area -->
+        <div class="glass-panel camera-card">
+          <div class="camera-header">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span id="camera-power-indicator" class="preflight-status-dot fail"></span>
+              <span style="font-size: 0.88rem; font-weight: 700;">Live Camera & Face Reticle</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span id="camera-power-text" style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">Hardware Standby</span>
+            </div>
+          </div>
+
+          <div class="stream-wrapper">
+            <video id="webcam-video" autoplay playsinline muted></video>
+            <canvas id="overlay-canvas"></canvas>
+            <div id="face-target-guide" class="face-target-guide">
+              <div class="target-center-dot"></div>
+            </div>
+            <!-- Clean Standby Viewfinder Indicator -->
+            <div id="viewfinder-standby-watermark" class="viewfinder-standby-watermark">
+              <div class="watermark-icon">📷</div>
+              <div class="watermark-title">Camera Ready</div>
+              <div class="watermark-sub">Click "Start Scan" below to begin measurement</div>
+            </div>
+          </div>
+
+          <!-- Camera Controls: Dedicated State-Driven Command Hub -->
+          <div class="camera-control-hub">
+            <div class="hub-primary-actions">
+              <button id="btn-camera-power" class="btn-camera-main" title="Turn webcam hardware ON or OFF">
+                <span id="cam-power-icon">📷</span>
+                <span id="cam-power-text">Turn Camera On</span>
+              </button>
+              <button id="btn-start-trial-main" class="btn-trial-main" title="Start real-time physiological signal measurement" disabled style="opacity: 0.5;">
+                <span id="trial-hub-icon">▶</span>
+                <span id="trial-hub-text">Start Scan</span>
+              </button>
+              <button id="btn-flip-camera-hub" class="btn btn-outline btn-sm" title="Switch Front/Rear Camera (Phone/Tablet)">
+                🔄 Flip Cam
+              </button>
+            </div>
+          </div>
+
+          <!-- Pre-flight checklist -->
+          <div class="preflight-bar">
+            <div class="preflight-item">
+              <div id="pf-dot-pos" class="preflight-status-dot fail"></div>
+              <span>Face Position</span>
+            </div>
+            <div class="preflight-item">
+              <div id="pf-dot-light" class="preflight-status-dot warn"></div>
+              <span>Illumination</span>
+            </div>
+            <div class="preflight-item">
+              <div id="pf-dot-stab" class="preflight-status-dot warn"></div>
+              <span>Head Stability</span>
+            </div>
+          </div>
+          <div style="padding: 0.5rem 1rem; font-size: 0.78rem; color: var(--text-secondary); background: rgba(255, 255, 255, 0.6); border-radius: 12px; text-align: center;">
+            <span id="preflight-message">Position your face inside the guide and click "Start Scan".</span>
+          </div>
+        </div>
+
+        <!-- Right Column: Real-Time Results, Waveform & Diagnostics -->
+        <div class="glass-panel visualizer-card">
+          
+          <!-- BPM Hero Gauge & Consensus Engine Display -->
+          <div class="bpm-hero-gauge">
+            <div>
+              <div style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 0.25rem;">
+                Consensus Heart Rate
+              </div>
+              <div class="bpm-number-display">
+                <span id="bpm-value" class="bpm-value">--</span>
+                <span class="bpm-unit">BPM</span>
+              </div>
+              <div id="consensus-summary-line" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                Agreement: <span id="consensus-spread-val" class="mono" style="color: var(--accent-cyan);">--</span> · <span id="consensus-concordant-val" class="mono" style="color: var(--accent-emerald);">0/5</span> concordant
+              </div>
+              <div id="last-update-time" class="mono" style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Status: Ready to Scan
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <div id="pulse-classification-badge" class="pulse-indicator-badge badge-warning" style="margin-bottom: 0.5rem;">
+                Ready
+              </div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);">
+                Signal Quality: <strong id="sqi-value-text" style="color: var(--accent-emerald);">0%</strong>
+              </div>
+              <div class="progress-bar-wrap" style="width: 120px; height: 6px; margin-left: auto;">
+                <div id="sqi-progress-bar" class="progress-bar-fill fill-emerald" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quality Status Banner -->
+          <div id="quality-alert-box" class="quality-alert-box">
+            <span>ℹ</span>
+            <span id="quality-alert-text">Click "Start Scan" to perform automated physiological assessment.</span>
+          </div>
+
+          <!-- Live rPPG Waveform Canvas -->
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+              <span style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 600;">FOREHEAD rPPG BLOOD VOLUME PULSE (BVP) WAVEFORM</span>
+              <span class="mono" style="font-size: 0.7rem; color: var(--accent-cyan);">0.75 - 3.5 Hz Bandpass</span>
+            </div>
+            <div class="waveform-container" style="height: 100px;">
+              <div class="waveform-grid-lines"></div>
+              <canvas id="rppg-canvas"></canvas>
+              <div id="waveform-empty-msg" class="waveform-empty-message">Waveform will render automatically during active scan.</div>
+            </div>
+          </div>
+
+          <!-- Health Indicators Row (Genuine CV & Signal Analysis) -->
+          <div class="metrics-row" style="margin-top: 0.65rem;">
+            
+            <!-- Eye Appearance / Sclera Redness -->
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-title">👁️ Eye Appearance</span>
+                <span id="eye-redness-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Sclera</span>
+              </div>
+              <div style="margin: 0.2rem 0;">
+                <div id="eye-redness-status" style="font-size: 0.95rem; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Normal</div>
+              </div>
+              <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
+                Eye redness indicator. Non-diagnostic.
+              </div>
+            </div>
+
+            <!-- Alertness / Drowsiness (EAR + Blinks) -->
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-title">⚡ Alertness</span>
+                <span id="alertness-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">EAR / Blinks</span>
+              </div>
+              <div style="margin: 0.2rem 0;">
+                <div id="alertness-val" style="font-size: 0.95rem; font-weight: 700; color: #0f172a;">🟢 Alert</div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  <span>EAR: <strong id="ear-value" class="mono" style="color: #0f172a;">0.28</strong></span>
+                  <span>Blinks: <strong id="blink-rate-value" class="mono" style="color: var(--accent-cyan);">0</strong></span>
+                </div>
+              </div>
+              <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
+                Webcam estimated alertness.
+              </div>
+            </div>
+
+            <!-- Facial Expression -->
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-title">😊 Expression</span>
+                <span id="expression-conf-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Geometry</span>
+              </div>
+              <div style="margin: 0.2rem 0;">
+                <div id="expression-val" style="font-size: 0.95rem; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Neutral / Focused</div>
+              </div>
+              <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
+                Landmark geometry analysis.
+              </div>
+            </div>
+
+            <!-- Visual Respiration -->
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-title">🫁 Respiration</span>
+                <span id="breathing-status-badge" class="pulse-indicator-badge badge-warning" style="font-size: 0.68rem;">Standby</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: baseline; margin: 0.2rem 0;">
+                <div>
+                  <div style="display: flex; align-items: baseline; gap: 0.3rem;">
+                    <span id="breathing-rate-val" class="mono" style="font-size: 1.1rem; font-weight: 800; color: var(--accent-cyan);">--</span>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);">BrPM</span>
+                  </div>
+                </div>
+                <div style="text-align: right;">
+                  <div class="mono" style="font-size: 0.72rem; color: #94a3b8;">0.1-0.5 Hz</div>
+                </div>
+              </div>
+              <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
+                Chin tracking estimate.
+              </div>
+            </div>
+
+            <!-- Blood Pressure Notice Card (Honest & Explicit) -->
+            <div class="metric-card">
+              <div class="metric-header">
+                <span class="metric-title">🩸 Blood Pressure</span>
+                <span class="pulse-indicator-badge badge-warning" style="font-size: 0.68rem;">Unavailable</span>
+              </div>
+              <div style="margin: 0.2rem 0;">
+                <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-secondary);">Not available from optical sensor</div>
+              </div>
+              <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
+                Requires clinical oscillometric cuff.
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Bottom Action Row (Single obvious location for completed scan actions) -->
+          <div class="live-action-dock">
+            <button id="btn-save-report" class="btn btn-success" disabled title="Save Completed Scan to Database">
+              <span>💾</span> Save Trial
+            </button>
+            <button id="btn-download-pdf" class="btn btn-primary" title="Download Official Clinical PDF">
+              <span>📄</span> Export PDF
+            </button>
+            <button id="btn-share-whatsapp" class="btn btn-whatsapp" title="Share Health Summary via WhatsApp">
+              <span>💬</span> WhatsApp
+            </button>
+            <button id="btn-send-email" class="btn btn-email" title="Email Clinical Health Summary">
+              <span>📧</span> Email
+            </button>
+          </div>
+
+          <!-- Collapsible Diagnostics & Algorithm Breakdown Drawer -->
+          <details id="diagnostics-drawer" class="diagnostics-drawer" style="margin-top: 0.65rem;">
+            <summary class="diagnostics-summary">
+              <span>⚙️ Advanced Technical Diagnostics (5-Algorithm Ensemble)</span>
+              <span class="diagnostics-chevron">▼</span>
+            </summary>
+            <div class="diagnostics-content">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <span style="font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Signal Processing Models</span>
+                <span style="font-size: 0.68rem; color: var(--text-muted);">Consensus Agreement: Spread ≤ 12 BPM</span>
+              </div>
+              <div class="consensus-grid">
+                <div id="card-algo-pos" class="algo-card">
+                  <div class="algo-name">POS</div>
+                  <div id="val-algo-pos" class="algo-val">--</div>
+                  <span id="tag-algo-pos" class="algo-tag">Standby</span>
+                </div>
+                <div id="card-algo-chrom" class="algo-card">
+                  <div class="algo-name">CHROM</div>
+                  <div id="val-algo-chrom" class="algo-val">--</div>
+                  <span id="tag-algo-chrom" class="algo-tag">Standby</span>
+                </div>
+                <div id="card-algo-green" class="algo-card">
+                  <div class="algo-name">GREEN</div>
+                  <div id="val-algo-green" class="algo-val">--</div>
+                  <span id="tag-algo-green" class="algo-tag">Standby</span>
+                </div>
+                <div id="card-algo-ica" class="algo-card">
+                  <div class="algo-name">FastICA</div>
+                  <div id="val-algo-ica" class="algo-val">--</div>
+                  <span id="tag-algo-ica" class="algo-tag">Standby</span>
+                </div>
+                <div id="card-algo-tscan" class="algo-card">
+                  <div class="algo-name">TS-CAN</div>
+                  <div id="val-algo-tscan" class="algo-val">--</div>
+                  <span id="tag-algo-tscan" class="algo-tag">Standby</span>
+                </div>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-muted); margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px solid var(--border-subtle);">
+                <span>Deep Model: <strong style="color: var(--accent-cyan);">TS-CAN 1D Neural Model</strong></span>
+                <span>Inference: <strong style="color: var(--accent-emerald);">Active</strong></span>
+              </div>
+            </div>
+          </details>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =========================================================================
+         VIEW 3: SMARTWATCH HEART-RATE VALIDATION & BENCHMARK
+         ========================================================================= -->
+    <section id="view-validation" class="view-section">
+      <div style="margin-bottom: 1.5rem; display: flex; flex-direction: column; md:flex-row; justify-content: space-between; gap: 1rem;">
+        <div>
+          <h2 style="font-size: 1.8rem;">Smartwatch <span class="gradient-text">Heart-Rate Validation & Benchmark</span></h2>
+          <p style="font-size: 0.88rem; color: var(--text-secondary); max-width: 800px; margin-top: 0.35rem;">
+            Empirical validation of camera-based PulseVision estimates against simultaneously recorded smartwatch heart rate.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center;">
+          <button id="btn-recalculate-stats" class="btn btn-outline btn-sm" title="Recompute validation statistics from stored trials">
+            🔄 Recalculate
+          </button>
+          <button id="btn-export-csv" class="btn btn-primary btn-sm" title="Download validation trials dataset as CSV">
+            📥 Export CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Statistical Benchmark Cards (Real Database Backed) -->
+      <div class="stats-counter-grid" style="margin-bottom: 2rem;">
+        <div class="stat-counter-box">
+          <div id="val-stat-mae" class="stat-counter-num" style="color: var(--accent-cyan);">--</div>
+          <div class="stat-label">
+            MAE (BPM)
+            <button type="button" class="pv-info-btn" data-info="mae" title="What is MAE?">i</button>
+          </div>
+          <span style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">Mean Absolute Error</span>
+        </div>
+        <div class="stat-counter-box">
+          <div id="val-stat-rmse" class="stat-counter-num" style="color: #60a5fa;">--</div>
+          <div class="stat-label">
+            RMSE (BPM)
+            <button type="button" class="pv-info-btn" data-info="rmse" title="What is RMSE?">i</button>
+          </div>
+          <span style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">Root Mean Square Error</span>
+        </div>
+        <div class="stat-counter-box">
+          <div id="val-stat-r" class="stat-counter-num" style="color: var(--accent-emerald);">--</div>
+          <div class="stat-label">
+            Pearson Correlation (r)
+            <button type="button" class="pv-info-btn" data-info="pearson" title="What is Pearson r?">i</button>
+          </div>
+          <span style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">Linear Trend Agreement</span>
+        </div>
+        <div class="stat-counter-box">
+          <div id="val-stat-trials" class="stat-counter-num" style="color: #0f172a;">0</div>
+          <div class="stat-label">
+            Valid Trials
+            <button type="button" class="pv-info-btn" data-info="trials" title="What are Valid Trials?">i</button>
+          </div>
+          <span id="val-stat-total-label" style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">0 total trials logged</span>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+        
+        <!-- Record New Validation Trial (Left Column) -->
+        <div class="glass-panel" style="padding: 1.75rem; display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+              <h3 style="font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                <span>⌚</span> Record Validation Trial
+              </h3>
+              <span id="val-trial-code-badge" class="pulse-indicator-badge badge-normal" style="font-family: var(--font-mono); font-size: 0.78rem;">
+                Trial ID: T001
+              </span>
+            </div>
+
+            <div style="background: rgba(239, 246, 255, 0.85); border: 1px solid rgba(191, 219, 254, 0.8); border-radius: 12px; padding: 0.65rem 0.85rem; margin-bottom: 1.25rem; font-size: 0.74rem; color: #1e40af; line-height: 1.4;">
+              ⏱️ <strong>Measurement Synchronization:</strong> Record the smartwatch BPM during the same measurement window as the PulseVision reading.
+            </div>
+
+            <form id="form-add-trial">
+              <!-- Trial ID & Participant Code -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Trial ID (Auto)</label>
+                  <input type="text" id="val-trial-id" class="form-input mono" value="T001" readonly style="color: var(--accent-cyan); font-weight: 700;">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Participant Code</label>
+                  <input type="text" id="val-participant-code" class="form-input mono" placeholder="e.g. P01" value="P01" required>
+                </div>
+              </div>
+
+              <!-- Reference Source: Strictly Smartwatch -->
+              <div class="form-group" style="margin-bottom: 0.85rem;">
+                <label class="form-label">Reference Source</label>
+                <div style="display: flex; align-items: center; gap: 0.65rem; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(200, 220, 245, 0.8); border-radius: 12px; padding: 0.6rem 0.85rem;">
+                  <span style="font-size: 1rem;">⌚</span>
+                  <span style="font-size: 0.84rem; font-weight: 600; color: #0f172a;">Smartwatch Heart Rate</span>
+                  <span style="font-size: 0.7rem; color: var(--text-muted); margin-left: auto;">Consumer Reference</span>
+                </div>
+                <input type="hidden" id="val-ref-source" value="Smartwatch">
+              </div>
+
+              <!-- Smartwatch BPM & PulseVision BPM -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Smartwatch BPM <span style="color: var(--accent-cyan);">*</span></label>
+                  <input type="number" step="0.5" min="30" max="240" id="val-sw-bpm" class="form-input mono" placeholder="e.g. 76" required style="font-size: 1.05rem; font-weight: 700; color: var(--accent-cyan);">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <label class="form-label" style="margin-bottom: 0;">PulseVision BPM</label>
+                    <button type="button" id="btn-sync-live-scan" class="btn btn-outline btn-sm" style="padding: 1px 7px; font-size: 0.68rem;" title="Pull latest valid measurement from Live Scan">
+                      🔄 Sync Live
+                    </button>
+                  </div>
+                  <input type="number" step="0.1" id="val-pv-bpm" class="form-input mono" placeholder="Awaiting Live Scan" readonly style="font-size: 1.05rem; font-weight: 700; color: var(--accent-emerald);">
+                </div>
+              </div>
+
+              <!-- Condition & Duration -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Condition</label>
+                  <select id="val-condition" class="form-input">
+                    <option value="Resting">Resting</option>
+                    <option value="Recovery">Recovery</option>
+                    <option value="After Normal Activity">After Normal Activity</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Duration</label>
+                  <input type="number" step="1" id="val-duration" class="form-input mono" value="30" placeholder="30s">
+                </div>
+              </div>
+
+              <!-- Signal Quality & Timestamp -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Signal Quality</label>
+                  <div id="val-signal-quality-badge" class="pulse-indicator-badge badge-normal" style="width: 100%; text-align: center; padding: 0.55rem 0.75rem; font-size: 0.78rem;">
+                    Good
+                  </div>
+                  <input type="hidden" id="val-signal-quality" value="1.0">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label class="form-label">Timestamp</label>
+                  <input type="text" id="val-timestamp" class="form-input mono" value="Auto-generated (UTC)" readonly style="color: var(--text-secondary); font-size: 0.72rem;">
+                </div>
+              </div>
+
+              <!-- Notes -->
+              <div class="form-group" style="margin-bottom: 1.25rem;">
+                <label class="form-label">Notes (Optional)</label>
+                <input type="text" id="val-notes" class="form-input" placeholder="e.g. Participant rested quietly, indoor lighting">
+              </div>
+
+              <button type="submit" id="btn-save-trial" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-weight: 700; letter-spacing: 0.03em;">
+                SAVE VALIDATION TRIAL
+              </button>
+              <div id="val-form-status" style="font-size: 0.75rem; text-align: center; margin-top: 0.5rem; min-height: 1.2rem;"></div>
+            </form>
+          </div>
+
+          <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle); font-size: 0.7rem; color: var(--text-muted); line-height: 1.4;">
+            💡 <em>Tip: Complete a Live Scan first to generate the camera-based PulseVision BPM, then record the smartwatch value at the same time.</em>
+          </div>
+        </div>
+
+        <!-- Visualizations (Right Column) -->
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          
+          <!-- Graph 1: PulseVision vs Smartwatch BPM Scatter Plot -->
+          <div class="glass-panel" style="padding: 1.5rem; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <div>
+                <h3 style="font-size: 1.05rem; margin: 0;">PulseVision vs Smartwatch BPM</h3>
+                <span style="font-size: 0.72rem; color: var(--text-secondary);">X: Smartwatch BPM · Y: PulseVision BPM</span>
+              </div>
+              <span class="mono" style="font-size: 0.72rem; color: var(--accent-cyan); background: rgba(0,240,255,0.08); padding: 2px 8px; border-radius: 4px;">
+                y = x Agreement
+              </span>
+            </div>
+
+            <!-- Scatter Plot Legend -->
+            <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.68rem; color: var(--text-secondary); margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <span><span style="color: #00ff9d;">●</span> Good (≤ 2 BPM)</span>
+              <span><span style="color: #ffb800;">●</span> Moderate (≤ 4 BPM)</span>
+              <span><span style="color: #ff2a6d;">●</span> High Diff (&gt; 4 BPM)</span>
+              <span><span style="color: var(--accent-cyan);">┅</span> Perfect Agreement (y=x)</span>
+            </div>
+
+            <div style="min-height: 220px; height: 220px; position: relative;">
+              <canvas id="validation-scatter-canvas" style="width: 100%; height: 100%; cursor: crosshair;"></canvas>
+              <div id="scatter-point-tooltip"></div>
+            </div>
+
+            <div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; margin-top: 0.35rem;">
+              *Prototype visualization thresholds — not medical accuracy standards. Click or hover point for trial details.*
+            </div>
+          </div>
+
+          <!-- Graph 2: Absolute Error by Trial -->
+          <div class="glass-panel" style="padding: 1.5rem; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <div>
+                <h3 style="font-size: 1.05rem; margin: 0;">Absolute Error by Trial</h3>
+                <span style="font-size: 0.72rem; color: var(--text-secondary);">X: Trial (Chronological) · Y: Absolute Error (BPM)</span>
+              </div>
+              <span id="val-mean-bias-pill" class="mono" style="font-size: 0.72rem; color: #a78bfa; background: rgba(167,139,250,0.1); padding: 2px 8px; border-radius: 4px;">
+                Mean Bias: -- BPM
+              </span>
+            </div>
+
+            <div style="min-height: 180px; height: 180px; position: relative;">
+              <canvas id="validation-error-canvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
+
+            <div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; margin-top: 0.35rem;">
+              Agreement visualization only — not a clinical threshold.
+            </div>
+          </div>
+
+          <!-- Statistical Agreement Summary (Bland-Altman Agreement Limits) -->
+          <div id="val-bland-altman-panel" class="glass-panel" style="padding: 1rem 1.25rem; font-size: 0.75rem; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <strong style="color: #0f172a;">Agreement Analysis (Bland–Altman):</strong>
+              <button type="button" class="pv-info-btn" data-info="bland_altman" title="What is Bland-Altman?">i</button>
+              <span id="val-ba-text" style="margin-left: 0.35rem;">Additional paired measurements are required for agreement analysis.</span>
+            </div>
+            <span id="val-ba-pill" class="mono" style="font-size: 0.7rem; color: var(--text-muted);">N &ge; 3 required</span>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- Trials Data Table -->
+      <div class="glass-panel" style="padding: 1.75rem; margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <h3 style="font-size: 1.15rem; margin: 0;">Validation Trials History</h3>
+            <span style="font-size: 0.76rem; color: var(--text-secondary);">Historical empirical trials stored in database (click row to inspect)</span>
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <span id="val-log-count-tag" class="mono" style="font-size: 0.75rem; color: var(--text-muted);">0 trials</span>
+          </div>
+        </div>
+
+        <!-- Contextual Bulk Actions Bar -->
+        <div id="val-bulk-bar" class="val-bulk-bar">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 0.8rem; font-weight: 700; color: var(--accent-cyan);">
+              Selected: <span id="val-selected-count">0</span>
+            </span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">trials</span>
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <button id="btn-bulk-edit" class="btn btn-outline btn-sm" style="font-size: 0.74rem;">
+              ✏️ Edit
+            </button>
+            <button id="btn-bulk-delete" class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4); font-size: 0.74rem;">
+              🗑️ Delete
+            </button>
+            <button id="btn-bulk-export" class="btn btn-primary btn-sm" style="font-size: 0.74rem;">
+              📥 Export Selected
+            </button>
+            <button id="btn-bulk-deselect" class="btn btn-outline btn-sm" style="font-size: 0.74rem;">
+              ✕ Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="pv-table">
+            <thead>
+              <tr>
+                <th style="width: 38px; text-align: center;">
+                  <input type="checkbox" id="val-select-all" class="val-checkbox" title="Select all visible trials">
+                </th>
+                <th>TRIAL</th>
+                <th>PARTICIPANT</th>
+                <th>CONDITION</th>
+                <th>SMARTWATCH BPM</th>
+                <th>PULSEVISION BPM</th>
+                <th>ABS ERROR</th>
+                <th>STATUS</th>
+                <th>TIME</th>
+                <th style="text-align: right;">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody id="validation-trials-tbody">
+              <!-- Rendered dynamically from real database records -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Research / Wellness Prototype Disclaimer Banner -->
+      <div style="background: rgba(240, 246, 255, 0.7); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem 1.25rem; font-size: 0.74rem; color: var(--text-muted); text-align: center; line-height: 1.5;">
+        🛡️ <strong>Research & Wellness Prototype Notice:</strong> PulseVision AI is an experimental computer-vision research platform and not a certified medical diagnostic device. The smartwatch is an independent consumer reference comparison device used solely for empirical benchmarking.
+      </div>
+    </section>
+
+    <!-- =========================================================================
+         MODAL: EDIT VALIDATION TRIAL (Single)
+         ========================================================================= -->
+    <div id="modal-edit-trial" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 480px;">
+        <button id="btn-close-edit-modal" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+        <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem;">
+          <span class="card-icon-box">✏️</span>
+          <div>
+            <h3 style="font-size: 1.15rem; margin: 0;">Edit Validation Trial</h3>
+            <span id="edit-trial-subtitle" style="font-size: 0.75rem; color: var(--text-secondary);">Modify stored measurement observation</span>
+          </div>
+        </div>
+
+        <form id="form-edit-trial">
+          <input type="hidden" id="edit-trial-id">
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Trial Code</label>
+              <input type="text" id="edit-trial-code" class="form-input mono" readonly style="background: rgba(240, 246, 255, 0.7);">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Participant Code</label>
+              <input type="text" id="edit-participant-code" class="form-input mono" required>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Smartwatch BPM</label>
+              <input type="number" step="0.5" min="30" max="240" id="edit-sw-bpm" class="form-input mono" required style="color: var(--accent-cyan); font-weight: 700;">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">PulseVision BPM</label>
+              <input type="number" step="0.5" min="30" max="240" id="edit-pv-bpm" class="form-input mono" required style="color: var(--accent-emerald); font-weight: 700;">
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.85rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Condition</label>
+              <select id="edit-condition" class="form-input">
+                <option value="Resting">Resting</option>
+                <option value="Recovery">Recovery</option>
+                <option value="After Normal Activity">After Normal Activity</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label">Trial Status</label>
+              <select id="edit-status" class="form-input">
+                <option value="VALID">VALID (Included in stats)</option>
+                <option value="INVALID">INVALID (Excluded from stats)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label class="form-label">Invalid Reason (If INVALID)</label>
+            <input type="text" id="edit-invalid-reason" class="form-input" placeholder="e.g. Excessive motion, watch loose">
+          </div>
+
+          <div class="form-group" style="margin-bottom: 1.25rem;">
+            <label class="form-label">Notes</label>
+            <input type="text" id="edit-notes" class="form-input" placeholder="Optional notes">
+          </div>
+
+          <div style="display: flex; gap: 0.75rem;">
+            <button type="submit" class="btn btn-primary" style="flex: 1;">Save Changes</button>
+            <button type="button" id="btn-cancel-edit" class="btn btn-outline" style="flex: 0.5;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         MODAL: BULK EDIT TRIALS
+         ========================================================================= -->
+    <div id="modal-bulk-edit" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 480px;">
+        <button id="btn-close-bulk-edit" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+        <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem;">
+          <span class="card-icon-box">✏️</span>
+          <div>
+            <h3 style="font-size: 1.15rem; margin: 0;">Bulk Edit Trials</h3>
+            <span id="bulk-edit-count-subtitle" style="font-size: 0.75rem; color: var(--text-secondary);">Update common attributes for selected trials</span>
+          </div>
+        </div>
+
+        <form id="form-bulk-edit">
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label class="form-label">Condition</label>
+            <select id="bulk-edit-condition" class="form-input">
+              <option value="">(No Change)</option>
+              <option value="Resting">Resting</option>
+              <option value="Recovery">Recovery</option>
+              <option value="After Normal Activity">After Normal Activity</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label class="form-label">Trial Status</label>
+            <select id="bulk-edit-status" class="form-input">
+              <option value="">(No Change)</option>
+              <option value="VALID">VALID (Included in stats)</option>
+              <option value="INVALID">INVALID (Excluded from stats)</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label class="form-label">Invalid Reason (If setting to INVALID)</label>
+            <input type="text" id="bulk-edit-invalid-reason" class="form-input" placeholder="e.g. Data verification rejected">
+          </div>
+
+          <div class="form-group" style="margin-bottom: 1.25rem;">
+            <label class="form-label">Notes (Appended / Overwritten)</label>
+            <input type="text" id="bulk-edit-notes" class="form-input" placeholder="Leave blank to preserve existing notes">
+          </div>
+
+          <div style="display: flex; gap: 0.75rem;">
+            <button type="submit" class="btn btn-primary" style="flex: 1;">Apply to Selected</button>
+            <button type="button" id="btn-cancel-bulk-edit" class="btn btn-outline" style="flex: 0.5;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         MODAL: CONFIRM DELETE (Single or Bulk)
+         ========================================================================= -->
+    <div id="modal-confirm-delete" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 420px; text-align: center; position: relative;">
+        <button type="button" onclick="closeConfirmDeleteModal()" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+        <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">🗑️</div>
+        <h3 id="delete-confirm-title" style="font-size: 1.2rem; margin-bottom: 0.5rem; color: #0f172a;">Delete Validation Trial?</h3>
+        <p id="delete-confirm-msg" style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1.5rem;">
+          This will permanently remove the record from the database and recalculate benchmark statistics. This action cannot be undone.
+        </p>
+        <div style="display: flex; gap: 0.75rem; justify-content: center;">
+          <button id="btn-confirm-delete-action" class="btn btn-primary" style="background: linear-gradient(135deg, #e11d48, #be123c); border-color: #f43f5e; flex: 1;">
+            Delete
+          </button>
+          <button id="btn-cancel-delete-action" class="btn btn-outline" onclick="closeConfirmDeleteModal()" style="flex: 1;">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         MODAL: SINGLE TRIAL DETAILS DRAWER / POPUP
+         ========================================================================= -->
+    <div id="modal-trial-detail" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 500px;">
+        <button id="btn-close-detail-modal" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+        <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem;">
+          <span class="card-icon-box">🔬</span>
+          <div>
+            <h3 id="detail-modal-title" style="font-size: 1.15rem; margin: 0;">Validation Trial Details</h3>
+            <span id="detail-modal-subtitle" style="font-size: 0.75rem; color: var(--text-secondary);">Stored measurement observation</span>
+          </div>
+        </div>
+
+        <div id="detail-modal-body" style="font-size: 0.8rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+          <!-- Dynamically populated -->
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+          <button id="btn-detail-edit" class="btn btn-primary btn-sm">✏️ Edit</button>
+          <button id="btn-detail-delete" class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4);">🗑️ Delete</button>
+          <button id="btn-detail-close" class="btn btn-outline btn-sm">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         MODAL: METRIC EXPLANATION POPOVER
+         ========================================================================= -->
+    <div id="modal-metric-info" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 440px;">
+        <button id="btn-close-metric-info" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+        <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1rem;">
+          <span class="card-icon-box" style="background: rgba(34, 211, 238, 0.1); color: var(--accent-cyan);">ℹ️</span>
+          <h3 id="metric-info-title" style="font-size: 1.1rem; margin: 0;">Metric Definition</h3>
+        </div>
+
+        <div id="metric-info-body" style="font-size: 0.84rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.25rem;">
+          <!-- Dynamically populated -->
+        </div>
+
+        <div style="text-align: right;">
+          <button id="btn-ack-metric-info" class="btn btn-primary btn-sm">Understood</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         MODAL: SEPARATE TECHNICAL INFORMATION & SYSTEM INSIGHTS DASHBOARD
+         ========================================================================= -->
+    <div id="modal-system-insights" class="modal-overlay">
+      <div class="glass-panel modal-content" style="max-width: 820px; max-height: 88vh; overflow-y: auto;">
+        <button id="btn-close-insights-modal" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+          <div class="brand-heart-icon" style="background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3);">
+            <span style="font-size: 1.1rem;">⚙️</span>
+          </div>
+          <div>
+            <h3 style="font-size: 1.25rem; margin: 0; color: #0f172a;">PulseVision System Insights & Architecture</h3>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);">Comprehensive technical documentation, models, database ER, and rPPG pipeline</span>
+          </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="insights-tab-nav">
+          <button class="insights-tab-btn active" data-tab="tab-overview">Overview & Pipeline</button>
+          <button class="insights-tab-btn" data-tab="tab-models">Models & rPPG</button>
+          <button class="insights-tab-btn" data-tab="tab-database">Database ER</button>
+          <button class="insights-tab-btn" data-tab="tab-methodology">Validation Methodology</button>
+          <button class="insights-tab-btn" data-tab="tab-disclaimer">Limitations</button>
+        </div>
+
+        <!-- Tab 1: Overview & Pipeline -->
+        <div id="tab-overview" class="insights-tab-pane active">
+          <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
+            PulseVision is a non-contact physiological assessment prototype that measures heart rate from webcam video using remote photoplethysmography (rPPG). By detecting subtle blood volume pulse (BVP) color variations in facial tissue, it extracts physiological signals without requiring physical contact.
+          </p>
+
+          <h4 style="font-size: 0.85rem; color: var(--accent-cyan); text-transform: uppercase; margin-bottom: 0.75rem;">End-to-End Processing Architecture</h4>
+          <div class="arch-pipeline-grid">
+            <div class="arch-node">
+              <span class="arch-node-badge" style="background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan);">1. INPUT</span>
+              <div>
+                <strong style="color: #0f172a; font-size: 0.8rem;">Webcam Video Stream</strong>
+                <div style="font-size: 0.72rem; color: var(--text-muted);">Standard RGB sensor at 30 fps (HD 720p/1080p).</div>
+              </div>
+            </div>
+            <div class="arch-node-arrow">↓</div>
+            <div class="arch-node">
+              <span class="arch-node-badge" style="background: rgba(45, 212, 191, 0.15); color: var(--accent-teal);">2. VISION</span>
+              <div>
+                <strong style="color: #0f172a; font-size: 0.8rem;">Face Detection & Forehead ROI Isolation</strong>
+                <div style="font-size: 0.72rem; color: var(--text-muted);">Facial landmark geometry isolates stable forehead and upper cheek skin while masking eyes, mouth, and hair.</div>
+              </div>
+            </div>
+            <div class="arch-node-arrow">↓</div>
+            <div class="arch-node">
+              <span class="arch-node-badge" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-emerald);">3. SIGNAL</span>
+              <div>
+                <strong style="color: #0f172a; font-size: 0.8rem;">Temporal Filtering & Signal Quality Gate (SQI)</strong>
+                <div style="font-size: 0.72rem; color: var(--text-muted);">Bandpass filtering (0.7–3.0 Hz / 42–180 BPM), SNR verification, motion artifact detection, and luminance stability checking.</div>
+              </div>
+            </div>
+            <div class="arch-node-arrow">↓</div>
+            <div class="arch-node">
+              <span class="arch-node-badge" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-amber);">4. ENSEMBLE</span>
+              <div>
+                <strong style="color: #0f172a; font-size: 0.8rem;">Multi-Algorithm Consensus (Traditional + Neural)</strong>
+                <div style="font-size: 0.72rem; color: var(--text-muted);">POS, CHROM, GREEN, FastICA, and TS-CAN execute concurrently. Outlier rejection with concordance spread ≤ 12 BPM.</div>
+              </div>
+            </div>
+            <div class="arch-node-arrow">↓</div>
+            <div class="arch-node">
+              <span class="arch-node-badge" style="background: rgba(167, 139, 250, 0.15); color: var(--accent-purple);">5. OUTPUT</span>
+              <div>
+                <strong style="color: #0f172a; font-size: 0.8rem;">BPM Output, Database Persistence & Clinical Reporting</strong>
+                <div style="font-size: 0.72rem; color: var(--text-muted);">Results persisted to MySQL database; paired against smartwatch reference on Page 3; exported to PDF/CSV.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Models & rPPG -->
+        <div id="tab-models" class="insights-tab-pane">
+          <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
+            All valid implemented signal processing and deep-learning methods run simultaneously behind the scenes. PulseVision combines them via median consensus weighting to ensure high robustness against individual channel noise.
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">POS (Plane-Orthogonal-to-Skin)</strong>
+                <span class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Active</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                Mathematical projection of normalized RGB signals onto an orthogonal plane to isolate hemoglobin absorption pulses from specular surface reflections.
+              </p>
+            </div>
+
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">CHROM (Chrominance-based rPPG)</strong>
+                <span class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Active</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                Linear combination of chrominance difference signals (Xs and Ys) that cancels out standardized illumination fluctuations.
+              </p>
+            </div>
+
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">GREEN (Direct Green Absorption)</strong>
+                <span class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Active</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                Tracks peak optical absorption of oxygenated hemoglobin (500–600 nm) across isolated facial pixels.
+              </p>
+            </div>
+
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">FastICA (Independent Component Analysis)</strong>
+                <span class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Active</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                Decomposes RGB traces into statistically independent subcomponents, selecting the source with the maximum spectral peak sharpness in the physiological range.
+              </p>
+            </div>
+
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">TS-CAN 1D (Temporal Shift Convolutional Network)</strong>
+                <span class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Active</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                End-to-end temporal shift neural model with attention modules operating on normalized facial RGB series for deep rPPG pulse extraction.
+              </p>
+            </div>
+
+            <div class="glass-panel" style="padding: 0.85rem; border: 1px solid var(--border-subtle);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <strong style="color: #0f172a; font-size: 0.85rem;">TS-CAN 2D Video Tensor Network</strong>
+                <span class="pulse-indicator-badge badge-warning" style="font-size: 0.68rem;">Available (GPU Optional)</span>
+              </div>
+              <p style="font-size: 0.74rem; color: var(--text-secondary); margin: 0;">
+                Full spatio-temporal 2D video convolutional neural network for frame-level tensor inference.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Database ER -->
+        <div id="tab-database" class="insights-tab-pane">
+          <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
+            PulseVision uses a relational schema (MySQL / SQLite) to maintain data consistency across users, clinical scans, reference validation trials, and communication logs.
+          </p>
+
+          <div class="er-grid">
+            <div class="er-card">
+              <div class="er-card-header">
+                <span>USERS</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">Entity</span>
+              </div>
+              <div class="er-field"><span class="er-pk">PK id</span><span>INT</span></div>
+              <div class="er-field"><span>email</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>name</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>phone</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>created_at</span><span>DATETIME</span></div>
+            </div>
+
+            <div class="er-card">
+              <div class="er-card-header">
+                <span>SCANS</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">1:N Users</span>
+              </div>
+              <div class="er-field"><span class="er-pk">PK id</span><span>INT</span></div>
+              <div class="er-field"><span class="er-fk">FK user_id</span><span>INT</span></div>
+              <div class="er-field"><span>estimated_bpm</span><span>FLOAT</span></div>
+              <div class="er-field"><span>confidence</span><span>FLOAT</span></div>
+              <div class="er-field"><span>stress_level</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>fatigue_level</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>signal_quality</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>started_at</span><span>DATETIME</span></div>
+            </div>
+
+            <div class="er-card">
+              <div class="er-card-header">
+                <span>VALIDATION_TRIALS</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">Page 3 Entity</span>
+              </div>
+              <div class="er-field"><span class="er-pk">PK id</span><span>INT</span></div>
+              <div class="er-field"><span class="er-fk">FK user_id</span><span>INT</span></div>
+              <div class="er-field"><span class="er-fk">FK scan_id</span><span>INT</span></div>
+              <div class="er-field"><span>trial_code</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>reference_bpm</span><span>FLOAT</span></div>
+              <div class="er-field"><span>pulsevision_bpm</span><span>FLOAT</span></div>
+              <div class="er-field"><span>absolute_error</span><span>FLOAT</span></div>
+              <div class="er-field"><span>status</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>timestamp</span><span>DATETIME</span></div>
+            </div>
+
+            <div class="er-card">
+              <div class="er-card-header">
+                <span>REPORTS & LOGS</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">Dispatch</span>
+              </div>
+              <div class="er-field"><span class="er-pk">PK id</span><span>INT</span></div>
+              <div class="er-field"><span>file_path</span><span>VARCHAR</span></div>
+              <div class="er-field"><span>email_logs</span><span>TABLE</span></div>
+              <div class="er-field"><span>sms_logs</span><span>TABLE</span></div>
+              <div class="er-field"><span>created_at</span><span>DATETIME</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Validation Methodology -->
+        <div id="tab-methodology" class="insights-tab-pane">
+          <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
+            Validation compares contactless PulseVision estimates against consumer optical smartwatches worn on the wrist during identical measurement windows.
+          </p>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.78rem;">
+            <div class="glass-panel" style="padding: 1rem;">
+              <strong style="color: var(--accent-cyan);">MAE (Mean Absolute Error)</strong>
+              <div class="mono" style="margin: 0.35rem 0; font-size: 0.85rem; color: #ffffff;">MAE = (1/N) * Σ |PV_i - Ref_i|</div>
+              <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">Measures average error magnitude in beats per minute across valid trials.</p>
+            </div>
+
+            <div class="glass-panel" style="padding: 1rem;">
+              <strong style="color: #60a5fa;">RMSE (Root Mean Square Error)</strong>
+              <div class="mono" style="margin: 0.35rem 0; font-size: 0.85rem; color: #ffffff;">RMSE = √[ (1/N) * Σ (PV_i - Ref_i)² ]</div>
+              <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">Penalizes larger outliers more heavily to assess prediction dispersion.</p>
+            </div>
+
+            <div class="glass-panel" style="padding: 1rem;">
+              <strong style="color: var(--accent-emerald);">Pearson Correlation (r)</strong>
+              <div class="mono" style="margin: 0.35rem 0; font-size: 0.85rem; color: #ffffff;">r = Cov(PV, Ref) / [σ_PV * σ_Ref]</div>
+              <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">Quantifies linear tracking agreement between camera and reference.</p>
+            </div>
+
+            <div class="glass-panel" style="padding: 1rem;">
+              <strong style="color: #a78bfa;">Bland–Altman 95% LoA</strong>
+              <div class="mono" style="margin: 0.35rem 0; font-size: 0.85rem; color: #ffffff;">LoA = Mean Bias ± 1.96 * SD_diff</div>
+              <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">Identifies systematic over- or under-estimation bias across the measurement range.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: Limitations -->
+        <div id="tab-disclaimer" class="insights-tab-pane">
+          <div style="background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.25); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1rem;">
+            <strong style="color: var(--accent-amber); font-size: 0.85rem;">🛡️ Academic & Research Prototype Disclaimer</strong>
+            <p style="font-size: 0.76rem; color: #fde68a; margin: 0.35rem 0 0 0; line-height: 1.5;">
+              PulseVision AI is an experimental computer-vision research platform. It is <strong>NOT a certified medical diagnostic device</strong>, has not been FDA-cleared or CE-marked, and should not be used as a substitute for professional clinical medical equipment or consultation.
+            </p>
+          </div>
+
+          <h4 style="font-size: 0.85rem; color: #0f172a; margin-bottom: 0.5rem;">Known Physical & Technical Limitations</h4>
+          <ul style="font-size: 0.76rem; color: var(--text-secondary); line-height: 1.6; padding-left: 1.25rem;">
+            <li><strong>Lighting Sensitivity:</strong> Low illumination (&lt; 150 lux) or rapid ambient lighting flicker degrades RGB signal-to-noise ratio.</li>
+            <li><strong>Motion Artifacts:</strong> Speaking, laughing, or excessive head movement introduces dominant motion frequencies that can obscure the cardiac signal.</li>
+            <li><strong>Consumer Smartwatch Reference:</strong> Smartwatches are consumer-grade optical PPG devices and are not certified clinical ECG standards.</li>
+            <li><strong>Physiological Range:</strong> Optical rPPG is benchmarked primarily for resting and recovery heart rates between 40 and 180 BPM.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========================================================================
+         VIEW 4: HEALTH REPORTS & ARCHIVE
+         ========================================================================= -->
+    <section id="view-reports" class="view-section">
+      <div style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.8rem;">Health Scan <span class="gradient-text">Reports & Archive</span></h2>
+        <p style="font-size: 0.88rem; color: var(--text-secondary);">Historical log of remote physiological assessments.</p>
+      </div>
+
+      <!-- Search & Filters Toolbar -->
+      <div class="glass-panel" style="padding: 0.85rem 1.25rem; margin-bottom: 1.25rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1; max-width: 480px;">
+          <span style="font-size: 1rem; color: var(--accent-cyan);">🔍</span>
+          <input type="text" id="report-search-input" class="form-input" placeholder="Search reports by date, classification, or algorithm..." style="height: 38px; font-size: 0.84rem;">
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <button id="btn-refresh-reports" class="btn btn-outline btn-sm" onclick="fetchScansHistory()" title="Reload reports archive">
+            🔄 Refresh
+          </button>
+        </div>
+      </div>
+
+      <div id="scans-history-container">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- =========================================================================
+         VIEW 5: USER PROFILE & ACCOUNT DEMOGRAPHICS
+         ========================================================================= -->
+    <section id="view-profile" class="view-section">
+      <div style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.8rem;">User Profile & <span class="gradient-text">Account Demographics</span></h2>
+        <p style="font-size: 0.88rem; color: var(--text-secondary);">Manage your clinical identity, contact details, and biometric trial attribution.</p>
+      </div>
+
+      <div class="profile-layout-grid">
+        <!-- Left: Summary Identity Card -->
+        <div class="glass-panel profile-identity-card">
+          <div class="profile-big-avatar" id="profile-card-avatar">👤</div>
+          <h3 class="profile-card-name" id="profile-card-name">Renziel Fernandez</h3>
+          <p class="profile-card-email" id="profile-card-email">renzielfernandez7@gmail.com</p>
+          <div class="profile-badge-pill">
+            <span class="badge-dot"></span> Verified Researcher / Clinician
+          </div>
+
+          <div class="profile-stats-grid">
+            <div class="profile-stat-box">
+              <span class="stat-number" id="profile-stat-scans">0</span>
+              <span class="stat-label">Scans Logged</span>
+            </div>
+            <div class="profile-stat-box">
+              <span class="stat-number" id="profile-stat-trials">0</span>
+              <span class="stat-label">Validation Trials</span>
+            </div>
+          </div>
+
+          <div class="profile-card-meta">
+            <div class="meta-row">
+              <span class="meta-title">Account Status</span>
+              <span class="meta-data text-emerald">Active • Synced</span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-title">Database Storage</span>
+              <span class="meta-data">MySQL Persistent</span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-title">Member ID</span>
+              <span class="meta-data" id="profile-card-userid">UID-4</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Edit Demographics Form Card -->
+        <div class="glass-panel profile-form-card">
+          <div class="profile-form-header">
+            <h3>Demographic & Contact Details</h3>
+            <span class="form-subtext">Stored securely in MySQL database</span>
+          </div>
+
+          <form id="form-user-profile" class="profile-edit-form">
+            <div class="form-row-2col">
+              <div class="form-field-group">
+                <label for="profile-input-name">Full Name</label>
+                <input type="text" id="profile-input-name" class="form-input" placeholder="e.g. Renziel Fernandez" required>
+              </div>
+              <div class="form-field-group">
+                <label for="profile-input-email">Email Address</label>
+                <input type="email" id="profile-input-email" class="form-input" placeholder="name@domain.com" required>
+              </div>
+            </div>
+
+            <div class="form-row-2col">
+              <div class="form-field-group">
+                <label for="profile-input-phone">Phone Number</label>
+                <input type="tel" id="profile-input-phone" class="form-input" placeholder="e.g. 8105911027">
+              </div>
+              <div class="form-field-group">
+                <label for="profile-input-sleep">Self-Reported Sleep Duration (hrs last night)</label>
+                <input type="number" step="0.5" id="profile-input-sleep" class="form-input" min="0" max="24" placeholder="e.g. 7.5">
+              </div>
+            </div>
+
+            <div class="form-row-2col">
+              <div class="form-field-group">
+                <label for="profile-input-age">Age (years)</label>
+                <input type="number" id="profile-input-age" class="form-input" min="1" max="120" placeholder="e.g. 22">
+              </div>
+              <div class="form-field-group">
+                <label for="profile-input-gender">Gender</label>
+                <select id="profile-input-gender" class="form-input">
+                  <option value="">Select Gender</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                  <option value="Prefer not to say">Prefer not to say</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="profile-save-feedback" class="profile-feedback-box" style="display: none;"></div>
+
+            <div class="profile-form-actions">
+              <button type="submit" id="btn-save-profile-page" class="btn-primary-matte">
+                <span>💾</span>
+                <span>Save Profile Changes</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =========================================================================
+       AUTH MODAL (Sign In & Register)
+       ========================================================================= -->
+  <div id="auth-modal" class="modal-overlay">
+    <div class="glass-panel modal-content">
+      <button id="btn-close-modal" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem;">
+        <button id="tab-login" class="btn btn-primary" style="flex: 1;">Sign In</button>
+        <button id="tab-register" class="btn btn-outline" style="flex: 1;">Register</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="form-login">
+        <div class="form-group">
+          <label class="form-label">Email or Username</label>
+          <input type="text" id="login-email" class="form-input" placeholder="e.g. kavana or user@domain.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="login-password" class="form-input" placeholder="••••••••" required>
+        </div>
+        <div id="login-error-msg" style="display:none; padding: 0.6rem 0.8rem; background: rgba(255, 42, 109, 0.15); border: 1px solid rgba(255, 42, 109, 0.4); border-radius: 8px; color: #ff6b8b; font-size: 0.82rem; margin-bottom: 0.8rem; line-height: 1.4;"></div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;">Sign In</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="form-register" style="display: none;">
+        <div class="form-group">
+          <label class="form-label">Full Name / Username</label>
+          <input type="text" id="reg-name" class="form-input" placeholder="e.g. Renziel or Kavana" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email or Username</label>
+          <input type="text" id="reg-email" class="form-input" placeholder="user@domain.com or username" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Phone Number (Optional)</label>
+          <input type="tel" id="reg-phone" class="form-input mono" placeholder="+919876543210 (Optional)">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="reg-password" class="form-input" placeholder="••••••••" required>
+        </div>
+        <div id="reg-error-msg" style="display:none; padding: 0.6rem 0.8rem; background: rgba(255, 42, 109, 0.15); border: 1px solid rgba(255, 42, 109, 0.4); border-radius: 8px; color: #ff6b8b; font-size: 0.82rem; margin-bottom: 0.8rem; line-height: 1.4;"></div>
+        <button type="submit" class="btn btn-emerald" style="width: 100%; margin-top: 0.5rem;">Create Account & Sign In</button>
+      </form>
+
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       NEW TRIAL MODAL (Scientific Protocol Configuration)
+       ========================================================================= -->
+  <div id="trial-modal" class="modal-overlay">
+    <div class="glass-panel modal-content" style="max-width: 500px;">
+      <button id="btn-close-trial-modal" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+      <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.25rem;">
+        <span style="font-size: 1.5rem;">🧪</span>
+        <div>
+          <h3 style="font-size: 1.2rem;">Initialize New Scientific Trial</h3>
+          <span style="font-size: 0.78rem; color: var(--text-secondary);">60-Second Multi-Algorithm Consensus Acquisition</span>
+        </div>
+      </div>
+
+      <form id="form-init-trial">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">Trial UID</label>
+            <input type="text" id="modal-trial-uid" class="form-input mono" readonly style="background: rgba(240, 246, 255, 0.7); color: var(--accent-cyan);">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Participant Code</label>
+            <input type="text" id="modal-participant-code" class="form-input" value="P01" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Experimental Condition</label>
+          <select id="modal-trial-condition" class="form-input">
+            <option value="Resting Baseline">Resting Baseline (Sitting Still)</option>
+            <option value="Post-Exercise (Elevated)">Post-Exercise (Elevated HR)</option>
+            <option value="Dim Lighting Environment">Dim Lighting Environment (&lt; 60 Lux)</option>
+            <option value="Bright Ambient Light">Bright Ambient Light (&gt; 300 Lux)</option>
+            <option value="Slight Head Movement">Slight Head Movement Protocol</option>
+            <option value="Extended Distance (1.2m)">Extended Distance (1.2m)</option>
+          </select>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">Ref. Heart Rate (BPM)</label>
+            <input type="number" step="0.5" id="modal-ref-hr" class="form-input mono" placeholder="e.g. 72 (Pulse Ox)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Ref. Source</label>
+            <select id="modal-ref-source" class="form-input">
+              <option value="Finger Pulse Oximeter">Finger Pulse Oximeter (SpO2)</option>
+              <option value="Clinical Monitor">Clinical Vital Signs Monitor</option>
+              <option value="ECG / Holter">ECG / Holter Sensor</option>
+              <option value="Manual Radial Palpation">Manual Radial Palpation</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="background: rgba(240, 246, 255, 0.7); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.75rem; margin-bottom: 0.85rem;">
+          <div style="font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.35rem;">
+            Manual Blood Pressure Reference Entry (mmHg)
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="form-group" style="margin-bottom: 0.25rem;">
+              <label class="form-label" style="font-size: 0.72rem;">Systolic (mmHg)</label>
+              <input type="number" id="modal-ref-sys" class="form-input mono" placeholder="e.g. 120">
+            </div>
+            <div class="form-group" style="margin-bottom: 0.25rem;">
+              <label class="form-label" style="font-size: 0.72rem;">Diastolic (mmHg)</label>
+              <input type="number" id="modal-ref-dia" class="form-input mono" placeholder="e.g. 80">
+            </div>
+          </div>
+          <div style="font-size: 0.68rem; color: var(--text-muted); margin-top: 0.35rem; line-height: 1.35;">
+            🛡️ <em>Notice: Webcam rPPG detects cutaneous blood volume pulse (BVP) and heart rate. Blood pressure values entered here are external reference values for clinical records and correlation studies only.</em>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Study Notes (Optional)</label>
+          <input type="text" id="modal-trial-notes" class="form-input" placeholder="e.g. Subject resting comfortably">
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.4rem;">
+          Initialize Trial (Ready State)
+        </button>
+      </form>
+    </div>
+  </div>
+
+    <!-- =========================================================================
+       SETTINGS & PROFILE MODAL (Requirement 3 & 10)
+       ========================================================================= -->
+  <div id="settings-modal" class="modal-overlay">
+    <div class="glass-panel modal-content" style="max-width: 520px;">
+      <button id="btn-close-settings" style="position: absolute; top: 1.25rem; right: 1.25rem; background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+
+      <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem;">
+        <span class="card-icon-box">⚙️</span>
+        <div>
+          <h3 style="font-size: 1.2rem;">System & Profile Settings</h3>
+          <span style="font-size: 0.78rem; color: var(--text-secondary);">Configure hardware, clinical profile, and notifications</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Full Name / Participant Code</label>
+        <input type="text" id="settings-name" class="form-input" placeholder="e.g. Dr. Alex Mercer or Participant 01">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Contact Email (for PDF Reports)</label>
+        <input type="email" id="settings-email" class="form-input" placeholder="user@domain.com">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">WhatsApp Mobile (+E.164 with Country Code)</label>
+        <input type="tel" id="settings-phone" class="form-input mono" placeholder="+1234567890">
+      </div>
+
+      <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.85rem; margin-bottom: 1.25rem;">
+        <div style="font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.4rem;">Active Backend Services</div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
+          <span>Core API:</span> <strong style="color: #1d4ed8;">http://127.0.0.1:8000</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
+          <span>MySQL Database:</span> <strong style="color: var(--accent-emerald);">Connected (3306)</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary);">
+          <span>rPPG Ensemble:</span> <strong style="color: var(--accent-cyan);">POS · CHROM · GREEN · FastICA · TS-CAN</strong>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem;">
+        <button id="btn-save-settings" class="btn btn-primary" style="flex: 1;">💾 Save Settings</button>
+        <button id="btn-dismiss-settings" class="btn btn-outline" style="flex: 0.5;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/heart3d.js?v=3.6.0"></script>
+  <script src="js/app.js?v=4.2.0-realistic-heart"></script>
+</body>
+</html>

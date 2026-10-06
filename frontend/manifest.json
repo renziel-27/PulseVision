@@ -1,0 +1,18 @@
+{
+  "name": "PulseVision AI Heart Monitor",
+  "short_name": "PulseVision",
+  "description": "AI-based Contactless Heart Rate Monitoring & Physiological Assessment",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#0d1527",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "assets/heart_3d_banner.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
