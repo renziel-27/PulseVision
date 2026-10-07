@@ -14,7 +14,13 @@
  */
 
 // Application State
-const API_BASE = (window.PULSEVISION_API_URL || window.VITE_API_URL || '').replace(/\/+$/, '');
+const API_BASE = (
+  window.PULSEVISION_API_URL ||
+  window.VITE_API_URL ||
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? ''
+    : 'https://pulsevision-ndgf.onrender.com')
+).replace(/\/+$/, '');
 
 const AppState = {
   currentUser: JSON.parse(localStorage.getItem('pulsevision_user')) || null,
