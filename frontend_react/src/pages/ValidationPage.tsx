@@ -97,10 +97,28 @@ export const ValidationPage: React.FC = () => {
         setDuration(String(Math.round(res.data.duration_seconds || 30)));
         setSignalQuality(res.data.signal_quality || 'Good');
         setStatusMsg({ text: res.data.message, type: 'info' });
+        return;
       }
     } catch (e) {
-      console.warn("Could not sync latest scan:", e);
+      console.warn("Could not sync latest scan from backend:", e);
     }
+
+    try {
+      const localScanStr = localStorage.getItem('pulsevision_latest_scan');
+      if (localScanStr) {
+        const localScan = JSON.parse(localScanStr);
+        if (localScan && localScan.bpm) {
+          setPulsevisionBpm(String(localScan.bpm));
+          if (localScan.duration) setDuration(String(Math.round(localScan.duration)));
+          if (localScan.signal_quality) setSignalQuality(localScan.signal_quality);
+          setStatusMsg({ text: `Loaded latest scan from session (${localScan.bpm} BPM)`, type: 'info' });
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not read local scan:", e);
+    }
+    setStatusMsg({ text: 'No live scan found. You may enter the PulseVision BPM manually.', type: 'info' });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -120,7 +138,7 @@ export const ValidationPage: React.FC = () => {
     setIsSaving(true);
     try {
       const isPoor = signalQuality.toLowerCase() === 'poor';
-      const res = await api.post('/validation/trial', {
+      const payload = {
         smartwatch_bpm: sw,
         pulsevision_bpm: pv,
         trial_code: nextTrialCode,
@@ -132,7 +150,10 @@ export const ValidationPage: React.FC = () => {
         status: isPoor ? 'INVALID' : 'VALID',
         invalid_reason: isPoor ? 'Poor signal quality' : null,
         notes: notes.trim() || null
-      });
+      };
+      console.log("[PulseVision] trial payload:", payload);
+      const res = await api.post('/validation/trial', payload);
+      console.log("[PulseVision] trial response:", res.data);
 
       if (res.data.id || res.data.success !== false) {
         setStatusMsg({ text: `Trial ${res.data.trial_code || nextTrialCode} saved successfully!`, type: 'success' });
@@ -746,10 +767,10 @@ export const ValidationPage: React.FC = () => {
                   <input
                     type="number"
                     step="0.1"
-                    placeholder="Awaiting Live Scan"
+                    placeholder="Enter or sync BPM"
                     value={pulsevisionBpm}
-                    readOnly
-                    className="w-full bg-slate-900/60 border border-slate-800 rounded-lg p-2.5 text-emerald-400 font-mono font-bold text-sm outline-none cursor-not-allowed"
+                    onChange={(e) => setPulsevisionBpm(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 focus:border-cyan-400 rounded-lg p-2.5 text-emerald-400 font-mono font-bold text-sm outline-none"
                     required
                   />
                 </div>

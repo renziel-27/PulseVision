@@ -36,6 +36,7 @@ export const ScanPage: React.FC = () => {
       });
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        videoRef.current.play().catch(() => {});
       }
       setStream(mediaStream);
       setIsScanning(true);
@@ -70,46 +71,71 @@ export const ScanPage: React.FC = () => {
 
     let animId: number;
     let lastEstimateTime = performance.now();
+    let lastFrameTime = performance.now();
+    let isProcessing = false;
 
     const processLoop = async () => {
-      if (videoRef.current && canvasRef.current && videoRef.current.readyState === 4) {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        canvas.width = 160;
-        canvas.height = 120;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const frameBase64 = canvas.toDataURL('image/jpeg', 0.6);
+      if (videoRef.current && canvasRef.current && videoRef.current.readyState >= 2 && !isProcessing) {
+        const now = performance.now();
+        // Send frame at ~10 FPS (every 100ms) to prevent network congestion
+        if (now - lastFrameTime >= 100) {
+          lastFrameTime = now;
+          isProcessing = true;
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          canvas.width = 160;
+          canvas.height = 120;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frameBase64 = canvas.toDataURL('image/jpeg', 0.6);
 
-          try {
-            // Send frame for face detection and ROI preflight
-            const res = await api.post('/process-frame', { image: frameBase64 });
-            const data = res.data;
-            if (data.success && data.preflight) {
-              setPreflight(data.preflight);
-              if (data.preflight.message) {
-                setStatusMsg(data.preflight.message);
-              }
-            }
-
-            // Estimate BPM every 800ms
-            if (performance.now() - lastEstimateTime > 800) {
-              lastEstimateTime = performance.now();
-              const estRes = await api.post('/estimate-rppg', { algorithm });
-              const estData = estRes.data;
-              if (estData.success && estData.is_valid && estData.bpm > 0) {
-                setBpm(estData.bpm);
-                setConfidence(estData.confidence);
-                setSqi(estData.sqi);
-                if (estData.waveform && estData.waveform.length > 0) {
-                  setWaveformDisplay(estData.waveform.slice(-100));
+            try {
+              // Send frame for face detection and ROI preflight
+              const res = await api.post('/process-frame', { image: frameBase64 });
+              const data = res.data;
+              console.log("[PulseVision] process-frame response:", data);
+              if (data.success && data.preflight) {
+                setPreflight(data.preflight);
+                if (data.preflight.message) {
+                  setStatusMsg(data.preflight.message);
                 }
               }
+
+              // Estimate BPM every 800ms
+              if (now - lastEstimateTime > 800) {
+                lastEstimateTime = now;
+                const estRes = await api.post('/estimate-rppg', { algorithm });
+                const estData = estRes.data;
+                if (estData.success) {
+                  if (estData.is_valid && estData.bpm > 0) {
+                    setBpm(estData.bpm);
+                    setConfidence(estData.confidence);
+                    setSqi(estData.sqi);
+                    setStatusMsg(`BPM available: ${estData.bpm} BPM (${estData.confidence}% Confidence)`);
+                    if (estData.waveform && estData.waveform.length > 0) {
+                      setWaveformDisplay(estData.waveform.slice(-100));
+                    }
+                    // Cache latest valid scan for seamless trial recording in Validation tab
+                    localStorage.setItem('pulsevision_latest_scan', JSON.stringify({
+                      bpm: estData.bpm,
+                      duration: 30,
+                      signal_quality: estData.sqi >= 0.7 ? 'Good' : (estData.sqi >= 0.4 ? 'Moderate' : 'Poor')
+                    }));
+                  } else if (estData.rejection_reason) {
+                    setStatusMsg(estData.rejection_reason);
+                  }
+                }
+              }
+            } catch (e: any) {
+              const errMsg = e?.response?.data?.detail || e?.message || 'Connection error';
+              setStatusMsg(`Detection warning: ${errMsg}. Check backend connection.`);
+            } finally {
+              isProcessing = false;
             }
-          } catch (e) {
-            // Ignore frame drops
+          } else {
+            isProcessing = false;
           }
         }
       }
