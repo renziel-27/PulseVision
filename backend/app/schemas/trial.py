@@ -28,6 +28,13 @@ class TrialCompleteRequest(BaseModel):
     reference_bpm: Optional[float] = None
     reference_systolic_bp: Optional[float] = None
     reference_diastolic_bp: Optional[float] = None
+    final_bpm: Optional[float] = None
+    consensus_bpm: Optional[float] = None
+    final_sqi: Optional[float] = None
+    final_confidence: Optional[float] = None
+    contributing_algorithms: Optional[str] = None
+    consensus_status: Optional[str] = None
+    algorithm_results: Optional[Dict[str, Any]] = None
 
 class TrialOut(BaseModel):
     id: int

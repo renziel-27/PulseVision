@@ -22,6 +22,19 @@ const API_BASE = (
     : 'https://pulsevision-ndgf.onrender.com')
 ).replace(/\/+$/, '');
 
+/**
+ * Centralized API header helper.
+ * Attaches Authorization: Bearer <token> if pulsevision_token exists in localStorage.
+ */
+function getAuthHeaders(customHeaders = {}) {
+  const headers = { ...customHeaders };
+  const token = localStorage.getItem('pulsevision_token');
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 const AppState = {
   currentUser: JSON.parse(localStorage.getItem('pulsevision_user')) || null,
   activeView: 'landing',
@@ -374,7 +387,9 @@ function switchView(viewName, updateHash = true) {
 async function syncUserProfile() {
   try {
     const userId = (AppState.currentUser && AppState.currentUser.id) ? AppState.currentUser.id : 4;
-    const res = await fetch(`${API_BASE}/api/auth/profile?user_id=${userId}`);
+    const res = await fetch(`${API_BASE}/api/auth/profile?user_id=${userId}`, {
+      headers: getAuthHeaders()
+    });
     if (res.ok) {
       const data = await res.json();
       AppState.currentUser = data;
@@ -450,7 +465,7 @@ async function saveProfilePageData() {
   try {
     const res = await fetch(`${API_BASE}/api/auth/profile?user_id=${userId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
 
@@ -856,8 +871,13 @@ function startFrameProcessing() {
 
   if (AppState.streamInterval) clearInterval(AppState.streamInterval);
 
+  let isFrameInFlight = false;
+
   AppState.streamInterval = setInterval(async () => {
     if (!AppState.cameraActive || !video || video.paused || video.ended) return;
+
+    // IN-FLIGHT REQUEST LOCK: Never have multiple process-frame requests simultaneously in flight
+    if (isFrameInFlight) return;
 
     const canvasW = overlayCanvas.clientWidth || video.videoWidth || 640;
     const canvasH = overlayCanvas.clientHeight || video.videoHeight || 480;
@@ -878,14 +898,26 @@ function startFrameProcessing() {
     capCtx.drawImage(video, 0, 0, targetW, targetH);
     const b64 = captureCanvas.toDataURL('image/jpeg', 0.65);
 
+    isFrameInFlight = true;
+    console.log("[PulseVision] frame sent");
+
     try {
       const res = await fetch(`${API_BASE}/api/process-frame`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ image: b64 })
       });
+
+      if (!res.ok) {
+        console.error("[PulseVision] API error:", {
+          endpoint: `${API_BASE}/api/process-frame`,
+          status: res.status
+        });
+        return;
+      }
+
       const data = await res.json();
-      console.log("[PulseVision] process-frame response:", data);
+      console.log("[PulseVision] frame response", data.success ? "success" : "failed");
 
       if (data.success) {
         updatePreflightUI(data.preflight);
@@ -898,13 +930,14 @@ function startFrameProcessing() {
         // Draw bounding box and Forehead ROI
         drawOverlayAnnotations(ctx, overlayCanvas.width, overlayCanvas.height, data.face_box, data.rois, targetW, targetH);
 
-        // Accumulate continuous measurement data ONLY while Detection is RUNNING (Requirement 4 & 5)
+        // Accumulate continuous measurement data ONLY while Detection is RUNNING
         if (AppState.trialState === 'RUNNING') {
           if (data.rgb_mean) {
             AppState.rgbHistory.push(data.rgb_mean);
-            if (AppState.rgbHistory.length <= 30) {
+            console.log(`[PulseVision] samples: ${AppState.rgbHistory.length}`);
+            if (AppState.rgbHistory.length <= 45) {
               const alertText = document.getElementById('quality-alert-text');
-              if (alertText) alertText.textContent = `Collecting facial rPPG signal (${AppState.rgbHistory.length}/30 frames)... Keep steady.`;
+              if (alertText) alertText.textContent = `Collecting facial rPPG signal (${AppState.rgbHistory.length}/45 frames)... Keep steady.`;
             }
           }
           if (data.chin_y !== undefined) {
@@ -925,7 +958,13 @@ function startFrameProcessing() {
         }
       }
     } catch (err) {
-      // Backend temporarily busy
+      console.error("[PulseVision] API error:", {
+        endpoint: `${API_BASE}/api/process-frame`,
+        status: "network_error",
+        response: err.message
+      });
+    } finally {
+      isFrameInFlight = false;
     }
   }, 100);
 }
@@ -1056,7 +1095,7 @@ async function queryLiveWaveformPreview() {
   try {
     const res = await fetch(`${API_BASE}/api/live-preview`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         rgb_history: AppState.rgbHistory.slice(-300), // Last 300 frames max
         fs: 10.0  // 100ms interval = 10fps
@@ -1372,7 +1411,7 @@ async function handleInitTrialSubmit(e) {
   try {
     const res = await fetch(`${API_BASE}/api/trials/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(trialPayload)
     });
     const trialData = await res.json();
@@ -1435,7 +1474,7 @@ async function startDetection() {
     if (!AppState.currentTrial || AppState.trialState !== 'READY') {
       const quickUid = `PV-SCAN-${Math.floor(1000 + Math.random() * 9000)}`;
       const trialPayload = {
-        user_id: AppState.currentUser.id,
+        user_id: AppState.currentUser ? AppState.currentUser.id : 1,
         trial_uid: quickUid,
         participant_code: 'P01',
         condition: 'Resting Protocol'
@@ -1444,15 +1483,28 @@ async function startDetection() {
       try {
         const res = await fetch(`${API_BASE}/api/trials/create`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(trialPayload)
         });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.error("[PulseVision] API error:", {
+            endpoint: `${API_BASE}/api/trials/create`,
+            status: res.status,
+            response: errData
+          });
+        }
         const trialData = await res.json();
         console.log("[PulseVision] trial response:", trialData);
         AppState.currentTrial = trialData;
         const uidBadge = document.getElementById('trial-uid-badge');
-        if (uidBadge) uidBadge.textContent = quickUid;
+        if (uidBadge) uidBadge.textContent = trialData.trial_uid || quickUid;
       } catch (e) {
+        console.error("[PulseVision] API error:", {
+          endpoint: `${API_BASE}/api/trials/create`,
+          status: "exception",
+          response: e.message
+        });
         AppState.currentTrial = { id: 1, trial_uid: quickUid };
       }
     }
@@ -1461,7 +1513,10 @@ async function startDetection() {
   }
 
   if (AppState.currentTrial?.id) {
-    fetch(`${API_BASE}/api/trials/${AppState.currentTrial.id}/start`, { method: 'POST' }).catch(() => {});
+    fetch(`${API_BASE}/api/trials/${AppState.currentTrial.id}/start`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    }).catch(() => {});
   }
 
   AppState.detectionActive = true;
@@ -1511,85 +1566,64 @@ async function startDetection() {
   if (alertText) alertText.textContent = 'Continuous rPPG detection active. Remain still and look into the camera.';
   if (lastUpdate) lastUpdate.textContent = 'Continuous scanning active...';
 
-  // Start Monotonic Elapsed Counter — auto-completes after 45 seconds
-  const AUTO_SCAN_TARGET_SEC = 45.0;
+  // Start Continuous Monotonic Elapsed Counter (no arbitrary 60s limit, user stops when ready)
   if (AppState.trialCountdownTimer) clearInterval(AppState.trialCountdownTimer);
-  AppState.trialCountdownTimer = setInterval(async () => {
+  AppState.trialCountdownTimer = setInterval(() => {
     if (!AppState.detectionActive || AppState.trialState !== 'RUNNING') {
       clearInterval(AppState.trialCountdownTimer);
       return;
     }
 
     const elapsedSec = (performance.now() - AppState.trialMonotonicStart) / 1000.0;
-    const remaining = Math.max(0, AUTO_SCAN_TARGET_SEC - elapsedSec);
-    const remSecs = Math.ceil(remaining);
-
     const countEl = document.getElementById('trial-countdown-badge');
     const barEl = document.getElementById('trial-progress-bar');
-    if (countEl) countEl.textContent = `⏱ Time: ${Math.floor(elapsedSec).toString().padStart(2,'0')}s / 45s`;
-    if (barEl) barEl.style.width = `${Math.min(100, (elapsedSec / AUTO_SCAN_TARGET_SEC) * 100).toFixed(1)}%`;
+    const elapsedMins = Math.floor(elapsedSec / 60);
+    const remSecs = Math.floor(elapsedSec % 60);
+    const timeStr = `${elapsedMins.toString().padStart(2, '0')}:${remSecs.toString().padStart(2, '0')}`;
 
-    // Auto-complete at 45s if we have sufficient RGB data
-    if (elapsedSec >= AUTO_SCAN_TARGET_SEC && AppState.detectionActive) {
-      clearInterval(AppState.trialCountdownTimer);
-      AppState.trialCountdownTimer = null;
+    if (countEl) {
+      countEl.textContent = `⏱ Elapsed: ${timeStr} (${AppState.rgbHistory.length} samples)`;
+    }
+    if (barEl) {
+      // Scale smoothly up to 10s baseline, then maintain 100% full
+      const pct = Math.min(100, (elapsedSec / 10.0) * 100);
+      barEl.style.width = `${pct.toFixed(1)}%`;
+    }
 
-      if (AppState.rgbHistory.length < 30) {
-        showToast("Insufficient signal quality — please improve lighting and remain still.", "warning");
-        cancelCurrentTrial("Insufficient signal data after 45s scan.");
-        return;
+    if (elapsedSec >= 10.0 && AppState.rgbHistory.length >= 45) {
+      const alertTextEl = document.getElementById('quality-alert-text');
+      if (alertTextEl && alertTextEl.textContent.includes('Collecting')) {
+        alertTextEl.textContent = 'Physiological signals stabilized. Click "Stop Scan" when ready to analyze.';
       }
-
-      showToast("45-second scan complete — computing consensus…", "success");
-      AppState.detectionActive = false;
-      AppState.trialState = 'PROCESSING';
-
-      const stateBadge = document.getElementById('trial-state-badge');
-      if (stateBadge) {
-        stateBadge.textContent = 'ANALYZING';
-        stateBadge.className = 'pulse-indicator-badge badge-normal';
-      }
-      if (countEl) { countEl.textContent = '⏱ 45s Complete'; countEl.classList.remove('active'); }
-      if (barEl) barEl.style.width = '100%';
-
-      // Reset hub button to Start Scan state
-      [document.getElementById('btn-start-trial-main'), document.getElementById('btn-start-trial-dock')].forEach(btn => {
-        if (!btn) return;
-        btn.classList.remove('running');
-        const icon = btn.querySelector('#trial-hub-icon, #trial-dock-icon, .hub-icon');
-        const text = btn.querySelector('#trial-hub-text, #trial-dock-text, .hub-text');
-        if (icon) icon.textContent = '▶';
-        if (text) text.textContent = 'Start Scan';
-      });
-
-      await finishAndComputeTrial(elapsedSec);
     }
   }, 250);
 
-  showToast("Real-time physiological detection engaged — 45s scan window started!", "info");
+  showToast("Real-time physiological detection engaged — continuous scan active!", "info");
 }
 
 async function stopDetection(reason = "User stopped detection.") {
-  if (AppState.cameraState === 'STOPPING') return; // Guard against double execution
+  if (AppState.isFinishingTrial) return; // Guard against double execution
+  if (AppState.trialState !== 'RUNNING' && !AppState.detectionActive) return;
 
   if (AppState.trialCountdownTimer) {
     clearInterval(AppState.trialCountdownTimer);
     AppState.trialCountdownTimer = null;
   }
 
-  setCameraState('STOPPING');
   AppState.detectionActive = false;
   const elapsedSec = (performance.now() - (AppState.trialMonotonicStart || performance.now())) / 1000.0;
 
-  // Enforce minimum required temporal signal (10 seconds)
-  if (elapsedSec < 10.0 || AppState.rgbHistory.length < 30) {
-    await cancelCurrentTrial(`Insufficient detection duration (${elapsedSec.toFixed(1)}s < 10s minimum requirement).`);
-    setCameraState(AppState.cameraActive ? 'STOPPED' : 'OFF');
+  // Enforce minimum required temporal signal (10 seconds and >= 45 frames)
+  if (elapsedSec < 10.0 || AppState.rgbHistory.length < 45) {
+    await cancelCurrentTrial(`Insufficient detection duration or signal buffer (${elapsedSec.toFixed(1)}s < 10s minimum requirement or ${AppState.rgbHistory.length} < 45 frames).`);
+    // Do NOT stop camera automatically
+    setCameraState(AppState.cameraActive ? 'READY' : 'OFF');
     return;
   }
 
   await finishAndComputeTrial(elapsedSec);
-  setCameraState(AppState.cameraActive ? 'STOPPED' : 'OFF');
+  // Do NOT stop camera automatically
+  setCameraState(AppState.cameraActive ? 'READY' : 'OFF');
 }
 
 async function cancelCurrentTrial(reason = "Detection cancelled.") {
@@ -1603,7 +1637,7 @@ async function cancelCurrentTrial(reason = "Detection cancelled.") {
     try {
       await fetch(`${API_BASE}/api/trials/${AppState.currentTrial.id}/cancel`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ reason: reason })
       });
     } catch (e) {
@@ -1659,13 +1693,19 @@ async function cancelCurrentTrial(reason = "Detection cancelled.") {
   if (lastUpdate) lastUpdate.textContent = 'Scan rejected (insufficient duration)';
 
   resetVitalsDisplaysToStandby();
-  setCameraState(AppState.cameraActive ? 'STOPPED' : 'OFF');
+  // Do NOT stop camera automatically
+  setCameraState(AppState.cameraActive ? 'READY' : 'OFF');
   showToast("Detection incomplete — minimum 10 seconds required. No reading emitted.", "warning");
 }
 
 async function finishAndComputeTrial(elapsedSec) {
-  if (elapsedSec < 9.5) {
-    cancelCurrentTrial("Elapsed duration was less than 10 seconds.");
+  if (AppState.isFinishingTrial) return; // Prevent double completion
+  if (AppState.trialState === 'COMPLETED' || AppState.currentTrial?.status === 'COMPLETED') return;
+  AppState.isFinishingTrial = true;
+
+  if (elapsedSec < 9.5 || AppState.rgbHistory.length < 45) {
+    AppState.isFinishingTrial = false;
+    cancelCurrentTrial("Elapsed duration was less than 10 seconds or insufficient samples (minimum 45 frames required).");
     return;
   }
 
@@ -1710,9 +1750,9 @@ async function finishAndComputeTrial(elapsedSec) {
 
   try {
     const fs = Math.max(5.0, Math.min(60.0, AppState.rgbHistory.length / elapsedSec));
-    const res = await fetch(`${API_BASE}/api/estimate-ensemble`, {
+    const ensembleRes = await fetch(`${API_BASE}/api/estimate-ensemble`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         duration_seconds: elapsedSec,
         rgb_history: AppState.rgbHistory,
@@ -1721,16 +1761,126 @@ async function finishAndComputeTrial(elapsedSec) {
         requested_duration_sec: elapsedSec
       })
     });
-    const result = await res.json();
 
-    if (result && result.success) {
-      applyTrialResults(result, elapsedSec);
-    } else {
-      cancelCurrentTrial("Consensus computation failed.");
+    if (!ensembleRes.ok) {
+      const errData = await ensembleRes.json().catch(() => ({}));
+      console.error("[PulseVision] API error:", {
+        endpoint: `${API_BASE}/api/estimate-ensemble`,
+        status: ensembleRes.status,
+        response: errData
+      });
+      cancelCurrentTrial("Consensus computation failed on server.");
+      return;
     }
+
+    const ensembleData = await ensembleRes.json();
+    console.log("[PulseVision] estimate-ensemble response:", ensembleData);
+
+    const calculatedBpm = ensembleData.consensus_bpm || ensembleData.final_bpm;
+    if (!ensembleData.success || !calculatedBpm || calculatedBpm <= 0) {
+      cancelCurrentTrial("Consensus could not produce a valid heart-rate estimate.");
+      return;
+    }
+
+    // REAL calculated values preserved directly from /api/estimate-ensemble (no fake defaults)
+    const finalSqi = typeof ensembleData.average_sqi === 'number' ? ensembleData.average_sqi : null;
+    const finalConf = typeof ensembleData.consensus_confidence === 'number' ? ensembleData.consensus_confidence : null;
+    const contribAlgos = Array.isArray(ensembleData.contributing_algorithms)
+      ? ensembleData.contributing_algorithms.join(', ')
+      : (typeof ensembleData.contributing_algorithms === 'string' ? ensembleData.contributing_algorithms : null);
+    const algoResults = ensembleData.algorithms || null;
+
+    // Keep actual calculated BPM in AppState and UI
+    AppState.currentBPM = calculatedBpm;
+    AppState.lastScanDuration = elapsedSec;
+    AppState.sqi = finalSqi !== null ? finalSqi : 0.0;
+    AppState.confidence = finalConf !== null ? finalConf : 0.0;
+    AppState.spreadBpm = typeof ensembleData.spread_bpm === 'number' ? ensembleData.spread_bpm : 0.0;
+    AppState.consensusStatus = ensembleData.consensus_status || 'COMPLETED';
+
+    const bpmVal = document.getElementById('bpm-value');
+    if (bpmVal) {
+      bpmVal.textContent = Math.round(calculatedBpm);
+      bpmVal.classList.remove('pulse-animate');
+      void bpmVal.offsetWidth;
+      bpmVal.classList.add('pulse-animate');
+    }
+
+    // Complete the trial in database using existing POST /api/trials/{trial_id}/complete
+    const currentTrialId = AppState.currentTrial?.id;
+    if (!currentTrialId) {
+      console.error("[PulseVision] API error: No active trial ID to complete");
+      showToast("No active trial ID found in session.", "error");
+      return;
+    }
+
+    const completePayload = {
+      actual_duration_sec: elapsedSec,
+      duration_seconds: elapsedSec,
+      total_frames: AppState.rgbHistory.length,
+      usable_frames: AppState.rgbHistory.length,
+      final_bpm: calculatedBpm,
+      consensus_bpm: calculatedBpm,
+      final_sqi: finalSqi,
+      final_confidence: finalConf,
+      contributing_algorithms: contribAlgos,
+      consensus_status: ensembleData.consensus_status || 'ACCEPTED',
+      algorithm_results: algoResults,
+      rgb_history: AppState.rgbHistory,
+      motion_history: AppState.motionHistory,
+      facial_indicators: AppState.facialIndicators
+    };
+
+    const completeRes = await fetch(`${API_BASE}/api/trials/${currentTrialId}/complete`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(completePayload)
+    });
+
+    const completeData = await completeRes.json().catch(() => ({}));
+
+    if (!completeRes.ok) {
+      console.error("[PulseVision] API error:", {
+        endpoint: `${API_BASE}/api/trials/${currentTrialId}/complete`,
+        status: completeRes.status,
+        response: completeData
+      });
+      // Do not pretend it succeeded. Show clear error. Keep calculated BPM in UI.
+      showToast(`Trial completed calculation (${calculatedBpm} BPM), but database sync failed: ${completeData.detail || completeRes.statusText}`, "error");
+      if (alertText) alertText.textContent = `Consensus calculated: ${calculatedBpm} BPM. (DB save failed)`;
+      if (stateBadge) {
+        stateBadge.textContent = 'CALCULATED';
+        stateBadge.className = 'pulse-indicator-badge badge-warning';
+      }
+      return;
+    }
+
+    // Only mark trial COMPLETED after completion request succeeds
+    console.log("[PulseVision] trial completed:", completeData);
+    AppState.currentTrial = completeData;
+    applyTrialResults(completeData, elapsedSec);
+
+    // Save latest scan info to localStorage for sync
+    localStorage.setItem('pulsevision_latest_scan', JSON.stringify({
+      id: completeData.id || currentTrialId,
+      bpm: calculatedBpm,
+      duration: elapsedSec,
+      sqi: finalSqi,
+      signal_quality: finalSqi >= 0.65 ? 'Good' : 'Moderate',
+      timestamp: new Date().toISOString()
+    }));
+
+    showToast(`Trial completed: ${calculatedBpm.toFixed(1)} BPM recorded successfully!`, "success");
+    fetchUserReports();
   } catch (err) {
-    console.error("Detection completion error:", err);
+    console.error("[PulseVision] API error:", {
+      endpoint: `${API_BASE}/api/trials/complete`,
+      status: "exception",
+      response: err.message
+    });
     cancelCurrentTrial("Network or server error during consensus computation.");
+  } finally {
+    AppState.isFinishingTrial = false;
   }
 }
 
@@ -1998,7 +2148,7 @@ function initValidationSuite() {
       try {
         const res = await fetch(`${API_BASE}/api/validation/trial`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(trialPayload)
         });
 
@@ -2119,7 +2269,7 @@ function initValidationSuite() {
       try {
         const res = await fetch(`${API_BASE}/api/validation/trial/${trialId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             smartwatch_bpm: swBpm,
             pulsevision_bpm: pvBpm,
@@ -2169,7 +2319,7 @@ function initValidationSuite() {
       try {
         const res = await fetch(`${API_BASE}/api/validation/bulk-update`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             trial_ids: selected,
             condition: cond,
@@ -2224,7 +2374,7 @@ function initValidationSuite() {
         showToast(`Deleting ${selected.length} validation trials...`, "info");
         const res = await fetch(`${API_BASE}/api/validation/bulk-delete`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ trial_ids: selected })
         });
         const data = await res.json();
@@ -2240,7 +2390,7 @@ function initValidationSuite() {
         showToast(`Deleting trial #${trialId}...`, "info");
         const res = await fetch(`${API_BASE}/api/validation/trial/${trialId}`, {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' }
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
         });
         const data = await res.json();
         if (res.ok && (data.success || res.status === 200)) {
@@ -2616,61 +2766,103 @@ async function syncLiveScanMeasurement(showFeedback = false) {
     tsInput.value = new Date().toISOString().replace('T', ' ').slice(0, 19);
   }
 
-  // 1. In-memory session from active Live Scan
-  if (AppState.currentBPM > 30) {
-    if (pvInput) pvInput.value = AppState.currentBPM.toFixed(1);
+  // 1. Preferred: Use the current in-memory AppState.currentBPM if valid (between 30 and 240)
+  if (AppState.currentBPM && AppState.currentBPM >= 30 && AppState.currentBPM <= 240) {
+    const actualBPM = Number(AppState.currentBPM);
+    if (pvInput) pvInput.value = actualBPM.toFixed(1);
     if (durationInput && AppState.lastScanDuration) durationInput.value = Math.round(AppState.lastScanDuration);
     if (sqBadge) {
-      const isGood = (AppState.sqi || 0.8) >= 0.65;
+      const isGood = (AppState.sqi || 0.85) >= 0.65;
       sqBadge.textContent = isGood ? 'Good' : 'Moderate';
       sqBadge.className = `pulse-indicator-badge ${isGood ? 'badge-normal' : 'badge-warning'}`;
     }
-    if (showFeedback) showToast(`Synced Live Scan reading: ${AppState.currentBPM.toFixed(1)} BPM`, 'success');
+    if (showFeedback) showToast(`Synced Live Scan reading: ${actualBPM.toFixed(1)} BPM`, 'success');
     return;
   }
 
-  // 1b. Check local session storage from Live Scan
+  // 2. Otherwise use the latest completed PulseVision trial from localStorage
   try {
     const localScanStr = localStorage.getItem('pulsevision_latest_scan');
     if (localScanStr) {
       const localScan = JSON.parse(localScanStr);
-      if (localScan && localScan.bpm) {
-        if (pvInput) pvInput.value = Number(localScan.bpm).toFixed(1);
+      if (localScan && localScan.bpm && Number(localScan.bpm) >= 30 && Number(localScan.bpm) <= 240) {
+        const actualBPM = Number(localScan.bpm);
+        if (pvInput) pvInput.value = actualBPM.toFixed(1);
         if (durationInput && localScan.duration) durationInput.value = Math.round(localScan.duration);
-        if (sqBadge && localScan.signal_quality) {
-          sqBadge.textContent = localScan.signal_quality;
+        if (sqBadge) {
+          sqBadge.textContent = localScan.signal_quality || 'Good';
           sqBadge.className = 'pulse-indicator-badge badge-normal';
         }
-        if (showFeedback) showToast(`Synced latest session reading: ${localScan.bpm} BPM`, 'success');
+        if (showFeedback) showToast(`Synced latest completed trial: ${actualBPM.toFixed(1)} BPM`, 'success');
         return;
       }
     }
   } catch (e) {}
 
-  // 2. Fetch latest valid scan from backend database
+  // 3. Otherwise query the existing /api/trials endpoint and select the latest completed trial for the logged-in user
   try {
-    const res = await fetch(`${API_BASE}/api/validation/latest-scan`);
-    const data = await res.json();
-    if (data.success && data.has_scan) {
-      if (pvInput) pvInput.value = data.bpm.toFixed(1);
-      if (durationInput) durationInput.value = Math.round(data.duration_seconds);
-      if (sqBadge) {
-        sqBadge.textContent = data.signal_quality || 'Good';
-        sqBadge.className = 'pulse-indicator-badge badge-normal';
+    const res = await fetch(`${API_BASE}/api/trials`, {
+      headers: getAuthHeaders()
+    });
+    if (res.ok) {
+      const trials = await res.json();
+      if (Array.isArray(trials) && trials.length > 0) {
+        const completedTrial = trials.find(t => t.status === 'COMPLETED' && t.final_bpm && Number(t.final_bpm) >= 30 && Number(t.final_bpm) <= 240);
+        if (completedTrial) {
+          const actualBPM = Number(completedTrial.final_bpm);
+          if (pvInput) pvInput.value = actualBPM.toFixed(1);
+          if (durationInput && completedTrial.actual_duration_sec) {
+            durationInput.value = Math.round(completedTrial.actual_duration_sec);
+          }
+          if (sqBadge) {
+            const isGood = (completedTrial.final_sqi || 0.85) >= 0.65;
+            sqBadge.textContent = isGood ? 'Good' : 'Moderate';
+            sqBadge.className = `pulse-indicator-badge ${isGood ? 'badge-normal' : 'badge-warning'}`;
+          }
+          if (showFeedback) showToast(`Synced latest trial record: ${actualBPM.toFixed(1)} BPM`, 'success');
+          return;
+        }
       }
-      if (showFeedback) showToast(data.message, 'success');
-    } else {
-      if (pvInput && !pvInput.value) pvInput.placeholder = 'Awaiting Live Scan';
-      if (showFeedback) showToast("No completed Live Scan found. Complete a scan on the Live Scan page first.", "info");
     }
-  } catch (e) {
-    console.warn("Could not query latest scan:", e);
+  } catch (err) {
+    console.error("[PulseVision] API error:", {
+      endpoint: `${API_BASE}/api/trials`,
+      status: "exception",
+      response: err.message
+    });
+  }
+
+  // Fallback: Check /api/validation/latest-scan
+  try {
+    const res = await fetch(`${API_BASE}/api/validation/latest-scan`, {
+      headers: getAuthHeaders()
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.has_scan && data.bpm >= 30 && data.bpm <= 240) {
+        if (pvInput) pvInput.value = Number(data.bpm).toFixed(1);
+        if (durationInput) durationInput.value = Math.round(data.duration_seconds || 30);
+        if (sqBadge) {
+          sqBadge.textContent = data.signal_quality || 'Good';
+          sqBadge.className = 'pulse-indicator-badge badge-normal';
+        }
+        if (showFeedback) showToast(data.message || `Synced scan: ${data.bpm} BPM`, 'success');
+        return;
+      }
+    }
+  } catch (e) {}
+
+  if (pvInput && !pvInput.value) pvInput.placeholder = 'Awaiting Live Scan';
+  if (showFeedback) {
+    showToast("No completed PulseVision trial found. Complete a scan on the Live Scan page first.", "info");
   }
 }
 
 async function fetchValidationTrials() {
   try {
-    const res = await fetch(`${API_BASE}/api/validation/trials`);
+    const res = await fetch(`${API_BASE}/api/validation/trials`, {
+      headers: getAuthHeaders()
+    });
     const data = await res.json();
     if (data.success) {
       AppState.validationTrials = data.trials || [];
@@ -3100,7 +3292,7 @@ async function saveCurrentReport() {
   try {
     const res = await fetch(`${API_BASE}/api/reports/save`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         user_id: AppState.currentUser.id,
         bpm: AppState.currentBPM,
@@ -3450,7 +3642,9 @@ function openAndPrintClinicalReport(d) {
 async function fetchUserReports() {
   const userId = (AppState.currentUser && AppState.currentUser.id) ? AppState.currentUser.id : 4;
   try {
-    const res = await fetch(`${API_BASE}/api/reports?user_id=${userId}`);
+    const res = await fetch(`${API_BASE}/api/reports?user_id=${userId}`, {
+      headers: getAuthHeaders()
+    });
     const data = await res.json();
     if (data.success) {
       renderReportsList(data.scans);

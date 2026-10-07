@@ -103,8 +103,25 @@ def complete_trial(trial_id: int, payload: TrialCompleteRequest, db: Session = D
     trial.total_frames = payload.total_frames
     trial.usable_frames = payload.usable_frames
 
-    # Measurement Duration Guard (Sensible 45s-60s window):
-    if dur < 40.0:
+    # Measurement Duration Guard (Minimum 10s continuous window):
+    if dur < 10.0:
+        trial.status = "REJECTED"
+        trial.consensus_status = "REJECTED"
+        trial.rejection_reason = f"Insufficient scan duration ({dur:.1f}s < 10s requirement). Complete at least 10 seconds of scanning."
+        trial.final_bpm = None
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Scan incomplete — minimum 10 seconds of continuous data required (received {dur:.1f}s)."
+        )
+
+    raw_bpm = payload.final_bpm if payload.final_bpm is not None else payload.consensus_bpm
+    rgb_history = payload.rgb_history or []
+    total_frames = payload.total_frames
+    usable_frames = payload.usable_frames
+
+    # If client did not provide calculated consensus BPM and dur < 40s, enforce standard requirement
+    if dur < 40.0 and raw_bpm is None:
         trial.status = "REJECTED"
         trial.consensus_status = "REJECTED"
         trial.rejection_reason = f"Insufficient scan duration ({dur:.1f}s < 45s requirement). Complete the automatic scan to produce valid physiological results."
@@ -115,8 +132,19 @@ def complete_trial(trial_id: int, payload: TrialCompleteRequest, db: Session = D
             detail=f"Scan incomplete — minimum 60 seconds of continuous data required (received {dur:.1f}s)."
         )
 
-    # Run Multi-Algorithm Consensus
-    rgb_history = payload.rgb_history or []
+    # Frame and sample validation: total and usable frames must be positive
+    if total_frames <= 0 or usable_frames <= 0:
+        trial.status = "REJECTED"
+        trial.consensus_status = "REJECTED"
+        trial.rejection_reason = "Invalid frame count: total and usable frames must be greater than zero."
+        trial.final_bpm = None
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid frame count: total and usable frames must be greater than zero."
+        )
+
+    # Sufficient rgb_history/sample count validation (minimum 45 frames)
     if len(rgb_history) < 45:
         trial.status = "REJECTED"
         trial.consensus_status = "REJECTED"
@@ -128,23 +156,71 @@ def complete_trial(trial_id: int, payload: TrialCompleteRequest, db: Session = D
         res.algorithm_results = {}
         return res
 
-    # Calculate actual sampling frequency from frame buffer and duration
-    effective_fs = max(5.0, min(60.0, float(len(rgb_history)) / max(1.0, dur)))
+    # Client-supplied consensus BPM from /api/estimate-ensemble
+    if raw_bpm is not None:
+        # Validate that final_bpm is numeric
+        try:
+            bpm_val = float(raw_bpm)
+        except (ValueError, TypeError):
+            trial.status = "REJECTED"
+            trial.consensus_status = "REJECTED"
+            trial.rejection_reason = "Non-numeric heart rate value provided."
+            trial.final_bpm = None
+            db.commit()
+            raise HTTPException(status_code=422, detail="Non-numeric heart rate value provided.")
 
-    consensus_res = run_multi_algorithm_consensus(
-        rgb_series=rgb_history,
-        fs=effective_fs,
-        requested_duration_sec=trial.requested_duration_sec
-    )
+        # Validate that final_bpm is within physiological range (30-240 BPM)
+        if bpm_val < 30.0 or bpm_val > 240.0:
+            trial.status = "REJECTED"
+            trial.consensus_status = "REJECTED"
+            trial.rejection_reason = f"Calculated heart rate ({bpm_val:.1f} BPM) is outside physiological range (30–240 BPM)."
+            trial.final_bpm = None
+            db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail=f"Calculated heart rate ({bpm_val:.1f} BPM) is outside physiological range (30–240 BPM)."
+            )
 
-    trial.final_bpm = consensus_res["consensus_bpm"] if consensus_res["consensus_status"] == "ACCEPTED" else None
-    trial.final_sqi = consensus_res["average_sqi"]
-    trial.final_confidence = consensus_res["consensus_confidence"]
-    trial.contributing_algorithms = ", ".join(consensus_res["contributing_algorithms"])
-    trial.consensus_status = consensus_res["consensus_status"]
-    trial.rejection_reason = consensus_res["rejection_reason"]
-    trial.algorithm_results_json = json.dumps(consensus_res["algorithms"])
-    trial.status = "COMPLETED" if consensus_res["consensus_status"] == "ACCEPTED" else "REJECTED"
+        trial.final_bpm = round(bpm_val, 1)
+        # Store real measurement quality or None (do not invent default values like 0.85 or 88.0)
+        trial.final_sqi = float(payload.final_sqi) if payload.final_sqi is not None else None
+        trial.final_confidence = float(payload.final_confidence) if payload.final_confidence is not None else None
+        trial.contributing_algorithms = str(payload.contributing_algorithms) if payload.contributing_algorithms else None
+        trial.consensus_status = payload.consensus_status or "ACCEPTED"
+        trial.rejection_reason = ""
+        if payload.algorithm_results:
+            trial.algorithm_results_json = json.dumps(payload.algorithm_results)
+        else:
+            trial.algorithm_results_json = None
+        trial.status = "COMPLETED" if trial.consensus_status == "ACCEPTED" else "REJECTED"
+
+        consensus_res = {
+            "consensus_bpm": trial.final_bpm,
+            "average_sqi": trial.final_sqi or 0.0,
+            "consensus_confidence": trial.final_confidence or 0.0,
+            "contributing_algorithms": [s.strip() for s in trial.contributing_algorithms.split(",")] if trial.contributing_algorithms else [],
+            "consensus_status": trial.consensus_status,
+            "rejection_reason": "",
+            "algorithms": payload.algorithm_results or {},
+            "spread_bpm": 0.0
+        }
+    else:
+        # Fallback: compute multi-algorithm consensus directly on backend
+        effective_fs = max(5.0, min(60.0, float(len(rgb_history)) / max(1.0, dur)))
+        consensus_res = run_multi_algorithm_consensus(
+            rgb_series=rgb_history,
+            fs=effective_fs,
+            requested_duration_sec=trial.requested_duration_sec
+        )
+
+        trial.final_bpm = consensus_res["consensus_bpm"] if consensus_res["consensus_status"] == "ACCEPTED" else None
+        trial.final_sqi = consensus_res["average_sqi"]
+        trial.final_confidence = consensus_res["consensus_confidence"]
+        trial.contributing_algorithms = ", ".join(consensus_res["contributing_algorithms"])
+        trial.consensus_status = consensus_res["consensus_status"]
+        trial.rejection_reason = consensus_res["rejection_reason"]
+        trial.algorithm_results_json = json.dumps(consensus_res["algorithms"])
+        trial.status = "COMPLETED" if consensus_res["consensus_status"] == "ACCEPTED" else "REJECTED"
 
     # Compute Visual Respiratory Rate if motion data provided
     motion_series = payload.motion_history or []
