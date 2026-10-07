@@ -13,33 +13,45 @@ def create_db_engine():
     if "mysql" in db_url:
         try:
             import pymysql
-            # Extract credentials or connect to host to ensure database exists
-            host = "127.0.0.1"
-            port = 3306
-            user = "root"
-            password = "root"
-            
-            # Simple connection to ensure pulsevision database exists
-            conn = pymysql.connect(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                autocommit=True
-            )
-            with conn.cursor() as cur:
-                cur.execute("CREATE DATABASE IF NOT EXISTS pulsevision CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
-            conn.close()
-            
+            from sqlalchemy.engine import make_url
+            parsed_url = make_url(db_url)
+            is_local = parsed_url.host in ("127.0.0.1", "localhost")
+
+            # For local MySQL only: ensure database exists
+            if is_local:
+                try:
+                    conn = pymysql.connect(
+                        host=parsed_url.host,
+                        port=parsed_url.port or 3306,
+                        user=parsed_url.username or "root",
+                        password=parsed_url.password or "root",
+                        autocommit=True
+                    )
+                    with conn.cursor() as cur:
+                        db_name = parsed_url.database or "pulsevision"
+                        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+                    conn.close()
+                except Exception as local_err:
+                    logger.warning(f"Could not verify/create local database: {local_err}")
+
+            # Remote / Cloud MySQL (e.g. Aiven) requires SSL
+            connect_args = {}
+            if not is_local or "ssl" in db_url.lower():
+                connect_args["ssl"] = {"check_hostname": False}
+
             eng = create_engine(
                 db_url,
+                connect_args=connect_args,
                 pool_pre_ping=True,
                 pool_recycle=3600
             )
             # Verify test query
             with eng.connect() as test_conn:
                 test_conn.execute(text("SELECT 1"))
-            print(f"[*] PulseVision Database: Connected to MySQL (127.0.0.1:3306/pulsevision)")
+            host_display = parsed_url.host or "MySQL"
+            port_display = parsed_url.port or 3306
+            db_display = parsed_url.database or "pulsevision"
+            print(f"[*] PulseVision Database: Connected to MySQL ({host_display}:{port_display}/{db_display})")
             return eng
         except Exception as e:
             print(f"[!] Warning: MySQL connection failed ({e}). Falling back to SQLite database.")
