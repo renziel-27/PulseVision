@@ -56,8 +56,16 @@ const AppState = {
 
   // Buffers accumulated during 60s continuous trial
   rgbHistory: [],
+  sampleTimestamps: [],
   motionHistory: [],
   facialIndicators: [],
+  lastPreviewTime: 0,
+  isPreviewInFlight: false,
+  lastSavedReportId: null,
+  lastSavedDownloadUrl: null,
+  lastSavedFileName: null,
+  cachedScans: [],
+  cachedReports: [],
 
   // Live Consensus Vitals
   currentBPM: 0,
@@ -872,18 +880,13 @@ function startFrameProcessing() {
   if (AppState.streamInterval) clearInterval(AppState.streamInterval);
 
   let isFrameInFlight = false;
+  const CAPTURE_CADENCE_MS = 220; // Paced cadence (200-250ms) for stable continuous acquisition
 
   AppState.streamInterval = setInterval(async () => {
     if (!AppState.cameraActive || !video || video.paused || video.ended) return;
 
     // IN-FLIGHT REQUEST LOCK: Never have multiple process-frame requests simultaneously in flight
     if (isFrameInFlight) return;
-
-    const canvasW = overlayCanvas.clientWidth || video.videoWidth || 640;
-    const canvasH = overlayCanvas.clientHeight || video.videoHeight || 480;
-    if (overlayCanvas.width !== canvasW) overlayCanvas.width = canvasW;
-    if (overlayCanvas.height !== canvasH) overlayCanvas.height = canvasH;
-    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
     // Capture frame preserving camera aspect ratio
     const vw = video.videoWidth || 640;
@@ -899,6 +902,7 @@ function startFrameProcessing() {
     const b64 = captureCanvas.toDataURL('image/jpeg', 0.65);
 
     isFrameInFlight = true;
+    const captureTimestamp = performance.now();
     console.log("[PulseVision] frame sent");
 
     try {
@@ -927,13 +931,20 @@ function startFrameProcessing() {
           updateFatigueStressUI(data.fatigue_stress);
         }
 
-        // Draw bounding box and Forehead ROI
+        // Draw bounding box and Forehead ROI on fresh dimensions without wiping between ticks
+        const canvasW = overlayCanvas.clientWidth || video.videoWidth || 640;
+        const canvasH = overlayCanvas.clientHeight || video.videoHeight || 480;
+        if (overlayCanvas.width !== canvasW) overlayCanvas.width = canvasW;
+        if (overlayCanvas.height !== canvasH) overlayCanvas.height = canvasH;
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         drawOverlayAnnotations(ctx, overlayCanvas.width, overlayCanvas.height, data.face_box, data.rois, targetW, targetH);
 
         // Accumulate continuous measurement data ONLY while Detection is RUNNING
         if (AppState.trialState === 'RUNNING') {
           if (data.rgb_mean) {
             AppState.rgbHistory.push(data.rgb_mean);
+            if (!AppState.sampleTimestamps) AppState.sampleTimestamps = [];
+            AppState.sampleTimestamps.push(captureTimestamp);
             console.log(`[PulseVision] samples: ${AppState.rgbHistory.length}`);
             if (AppState.rgbHistory.length <= 45) {
               const alertText = document.getElementById('quality-alert-text');
@@ -947,11 +958,11 @@ function startFrameProcessing() {
             AppState.facialIndicators.push(data.fatigue_stress.estimated_expression);
           }
 
-          // Live preview waveform query during active detection — throttled to ~2.5s
-          if (data.face_box && AppState.rgbHistory.length >= 25) {
-            AppState._previewFrameCounter = (AppState._previewFrameCounter || 0) + 1;
-            if (AppState._previewFrameCounter >= 25) {
-              AppState._previewFrameCounter = 0;
+          // Live preview waveform query during active detection — triggered on elapsed time (~2.5s)
+          const now = performance.now();
+          if (data.face_box && AppState.rgbHistory.length >= 30) {
+            if (!AppState.lastPreviewTime || (now - AppState.lastPreviewTime) >= 2500) {
+              AppState.lastPreviewTime = now;
               queryLiveWaveformPreview();
             }
           }
@@ -966,7 +977,7 @@ function startFrameProcessing() {
     } finally {
       isFrameInFlight = false;
     }
-  }, 100);
+  }, CAPTURE_CADENCE_MS);
 }
 
 function drawOverlayAnnotations(ctx, canvasW, canvasH, faceBox, rois, frameW = 320, frameH = 240) {
@@ -1091,14 +1102,36 @@ function updateFatigueStressUI(data) {
 }
 
 async function queryLiveWaveformPreview() {
-  if (AppState.rgbHistory.length < 30) return; // Not enough data yet
+  if (AppState.isPreviewInFlight) return;
+  if (AppState.rgbHistory.length < 30) return; // Need at least 30 frames for POS & FFT
+
+  AppState.isPreviewInFlight = true;
   try {
+    // Calculate real effective sampling rate from accumulated samples & elapsed time
+    const numSamples = AppState.rgbHistory.length;
+    let elapsedSec = 0;
+    if (AppState.sampleTimestamps && AppState.sampleTimestamps.length >= 2) {
+      const first = AppState.sampleTimestamps[0];
+      const last = AppState.sampleTimestamps[AppState.sampleTimestamps.length - 1];
+      elapsedSec = (last - first) / 1000;
+    }
+    if (!elapsedSec || elapsedSec <= 0) {
+      elapsedSec = (performance.now() - (AppState.trialMonotonicStart || performance.now())) / 1000;
+    }
+    elapsedSec = Math.max(0.5, elapsedSec);
+
+    // effectiveFs = numberOfSamples / elapsedSeconds (clamped to physiological rPPG bounds)
+    const rawFs = numSamples / elapsedSec;
+    const effectiveFs = Math.max(2.0, Math.min(60.0, Number(rawFs.toFixed(2))));
+
+    console.log(`[PulseVision] live-preview query: ${numSamples} samples, ${elapsedSec.toFixed(1)}s elapsed, effectiveFs: ${effectiveFs}`);
+
     const res = await fetch(`${API_BASE}/api/live-preview`, {
       method: 'POST',
       headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         rgb_history: AppState.rgbHistory.slice(-300), // Last 300 frames max
-        fs: 10.0  // 100ms interval = 10fps
+        fs: effectiveFs
       })
     });
     const data = await res.json();
@@ -1108,8 +1141,8 @@ async function queryLiveWaveformPreview() {
 
       const sqiBar = document.getElementById('sqi-progress-bar');
       const sqiVal = document.getElementById('sqi-value-text');
-      if (sqiBar) sqiBar.style.width = `${Math.round(data.sqi * 100)}%`;
-      if (sqiVal) sqiVal.textContent = `${Math.round(data.sqi * 100)}%`;
+      if (sqiBar) sqiBar.style.width = `${Math.round((data.sqi || 0) * 100)}%`;
+      if (sqiVal) sqiVal.textContent = `${Math.round((data.sqi || 0) * 100)}%`;
 
       // Show live BPM preview during trial (labelled as "Preview")
       if (data.is_valid && data.bpm > 0 && AppState.trialState === 'RUNNING') {
@@ -1117,7 +1150,9 @@ async function queryLiveWaveformPreview() {
       }
     }
   } catch (e) {
-    // Ignore preview errors during continuous trial
+    console.warn("[PulseVision] Live preview query error:", e);
+  } finally {
+    AppState.isPreviewInFlight = false;
   }
 }
 
@@ -1523,6 +1558,12 @@ async function startDetection() {
   AppState.trialState = 'RUNNING';
   AppState.scanCompleted = false;
   AppState.rgbHistory = [];
+  AppState.sampleTimestamps = [];
+  AppState.lastPreviewTime = 0;
+  AppState.isPreviewInFlight = false;
+  AppState.lastSavedReportId = null;
+  AppState.lastSavedDownloadUrl = null;
+  AppState.lastSavedFileName = null;
   AppState.motionHistory = [];
   AppState.facialIndicators = [];
   AppState.trialMonotonicStart = performance.now();
@@ -1749,7 +1790,13 @@ async function finishAndComputeTrial(elapsedSec) {
   if (lastUpdate) lastUpdate.textContent = 'Computing multi-algorithm consensus...';
 
   try {
-    const fs = Math.max(5.0, Math.min(60.0, AppState.rgbHistory.length / elapsedSec));
+    let sampleElapsed = 0;
+    if (AppState.sampleTimestamps && AppState.sampleTimestamps.length >= 2) {
+      sampleElapsed = (AppState.sampleTimestamps[AppState.sampleTimestamps.length - 1] - AppState.sampleTimestamps[0]) / 1000;
+    }
+    const effectiveDuration = Math.max(0.5, sampleElapsed || elapsedSec);
+    const calculatedFs = AppState.rgbHistory.length / effectiveDuration;
+    const fs = Math.max(2.0, Math.min(60.0, Number(calculatedFs.toFixed(2))));
     const ensembleRes = await fetch(`${API_BASE}/api/estimate-ensemble`, {
       method: 'POST',
       headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -3307,6 +3354,9 @@ async function saveCurrentReport() {
     });
     const data = await res.json();
     if (data.success) {
+      AppState.lastSavedReportId = data.id;
+      AppState.lastSavedDownloadUrl = data.download_url;
+      AppState.lastSavedFileName = data.file_name;
       showToast("Health Report successfully saved to your profile!", "success");
       fetchUserReports();
     } else {
@@ -3403,34 +3453,107 @@ Generated via PulseVision AI`;
   showToast("Opening WhatsApp with your formatted health report!", "success");
 }
 
-function downloadCurrentReportPDF() {
+async function downloadReportFile(reportIdOrUrl, fileName = 'PulseVision_Clinical_Report.pdf') {
+  try {
+    showToast("Downloading clinical PDF report...", "info");
+    const rawUrl = String(reportIdOrUrl);
+    const downloadUrl = rawUrl.startsWith('http')
+      ? rawUrl
+      : (rawUrl.startsWith('/') ? `${API_BASE}${rawUrl}` : `${API_BASE}/api/reports/${rawUrl}/download`);
+
+    const res = await fetch(downloadUrl, {
+      headers: getAuthHeaders()
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const blob = await res.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.style.display = 'none';
+    link.href = blobUrl;
+    link.download = fileName || 'PulseVision_Clinical_Report.pdf';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+    showToast("PDF report downloaded successfully!", "success");
+  } catch (err) {
+    console.error("PDF download failed:", err);
+    showToast(`PDF download failed: ${err.message}`, "error");
+  }
+}
+
+async function generateAndDownloadScanReport(scanId) {
+  try {
+    showToast("Generating official ReportLab PDF from scan...", "info");
+    const userId = (AppState.currentUser && AppState.currentUser.id) ? AppState.currentUser.id : 1;
+    const res = await fetch(`${API_BASE}/api/reports/save`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ user_id: userId, scan_id: scanId })
+    });
+    const data = await res.json();
+    if (data.success && data.download_url) {
+      await downloadReportFile(data.download_url, data.file_name || `PulseVision_Report_Scan_${scanId}.pdf`);
+      fetchUserReports();
+    } else {
+      showToast(data.detail || "Could not generate PDF report.", "error");
+    }
+  } catch (err) {
+    console.error("Error generating scan report PDF:", err);
+    showToast("Failed to generate PDF report.", "error");
+  }
+}
+
+async function downloadCurrentReportPDF() {
   if (!AppState.scanCompleted || AppState.currentBPM <= 0) {
     showToast("Please complete a detection scan (≥ 10s) before generating PDF report.", "warning");
     return;
   }
-  const user = AppState.currentUser || { name: 'Patient / User', phone: 'Not Registered' };
-  const bpm = AppState.currentBPM;
 
-  const reportData = {
-    userName: user.name,
-    phone: user.phone || 'N/A',
-    timestamp: new Date().toLocaleString(),
-    bpm: bpm,
-    classification: AppState.classification || 'Normal Resting Heart Rate',
-    confidence: AppState.confidence > 0 ? `${AppState.confidence.toFixed(1)}%` : '92.4%',
-    sqi: `${Math.round((AppState.sqi || 0.88) * 100)}%`,
-    algorithm: 'Coordinated Multi-Algorithm Consensus (POS, CHROM, GREEN, FastICA, TS-CAN)',
-    breathingRate: AppState.breathingRate > 0 ? `${Math.round(AppState.breathingRate)} BrPM (Visual Motion)` : '16 BrPM (Visual Motion)',
-    dominantExpression: AppState.dominantExpression || 'Neutral / Focused',
-    stressLevel: AppState.stressData.stressLevel,
-    stressScore: AppState.stressData.stressScore || 20,
-    fatigueLevel: AppState.fatigueData.fatigueLevel,
-    earValue: AppState.fatigueData.ear ? AppState.fatigueData.ear.toFixed(3) : '0.280',
-    blinkRate: `${AppState.fatigueData.blinkRate || 14} blinks/min`,
-    eyeRedness: `${AppState.fatigueData.eyeRednessScore || 18}% (${AppState.fatigueData.eyeRednessStatus || 'Clear Sclera'})`
-  };
+  // If already saved in this session, download directly from backend
+  if (AppState.lastSavedDownloadUrl) {
+    await downloadReportFile(AppState.lastSavedDownloadUrl, AppState.lastSavedFileName || `PulseVision_Report_${Math.round(AppState.currentBPM)}BPM.pdf`);
+    return;
+  }
 
-  openAndPrintClinicalReport(reportData);
+  // Otherwise, generate official ReportLab PDF via backend
+  showToast("Generating official clinical PDF from current scan...", "info");
+  const user = AppState.currentUser || { id: 1, name: 'Research Participant', email: 'participant@pulsevision.local' };
+  try {
+    const res = await fetch(`${API_BASE}/api/reports/save`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        user_id: user.id,
+        bpm: AppState.currentBPM,
+        confidence: AppState.confidence || 88.0,
+        stress_level: AppState.stressData?.stressLevel || "Low (Relaxed)",
+        fatigue_level: AppState.fatigueData?.fatigueLevel || "Normal",
+        ear_value: AppState.fatigueData?.ear || 0.28,
+        signal_quality: `${Math.round((AppState.sqi || 0.88) * 100)}% (Optimal)`,
+        algorithm_used: 'CONSENSUS_ENSEMBLE',
+        classification: AppState.classification || "Normal Range"
+      })
+    });
+    const data = await res.json();
+    if (data.success && data.download_url) {
+      AppState.lastSavedReportId = data.id;
+      AppState.lastSavedDownloadUrl = data.download_url;
+      AppState.lastSavedFileName = data.file_name;
+      await downloadReportFile(data.download_url, data.file_name || `PulseVision_Report_${Math.round(AppState.currentBPM)}BPM.pdf`);
+      fetchUserReports();
+    } else {
+      showToast(data.detail || data.error || "Failed to generate report PDF.", "error");
+    }
+  } catch (err) {
+    console.error("Error generating report PDF:", err);
+    showToast("Failed to generate PDF report.", "error");
+  }
 }
 
 function openAndPrintClinicalReport(d) {
@@ -3640,28 +3763,30 @@ function openAndPrintClinicalReport(d) {
 }
 
 async function fetchUserReports() {
-  const userId = (AppState.currentUser && AppState.currentUser.id) ? AppState.currentUser.id : 4;
+  const userId = (AppState.currentUser && AppState.currentUser.id) ? AppState.currentUser.id : 1;
   try {
     const res = await fetch(`${API_BASE}/api/reports?user_id=${userId}`, {
       headers: getAuthHeaders()
     });
     const data = await res.json();
     if (data.success) {
-      renderReportsList(data.scans);
+      AppState.cachedScans = data.scans || [];
+      AppState.cachedReports = data.reports || [];
+      renderReportsList(data.scans, data.reports);
     }
   } catch (err) {
     console.warn("Could not fetch reports:", err);
   }
 }
 
-function renderReportsList(scans) {
+function renderReportsList(scans, reports = null) {
   const container = document.getElementById('scans-history-container');
   if (!container) return;
 
   const searchInput = document.getElementById('report-search-input');
   const filterQuery = (searchInput ? searchInput.value : '').toLowerCase().trim();
 
-  let filteredScans = scans || [];
+  let filteredScans = scans || AppState.cachedScans || [];
   if (filterQuery) {
     filteredScans = filteredScans.filter(s => {
       const dateStr = new Date(s.timestamp).toLocaleString().toLowerCase();
@@ -3684,11 +3809,25 @@ function renderReportsList(scans) {
   }
   scans = filteredScans;
 
+  const currentReports = reports || AppState.cachedReports || [];
+  const reportsByScanId = {};
+  if (Array.isArray(currentReports)) {
+    currentReports.forEach(r => {
+      if (r.scan_id) reportsByScanId[r.scan_id] = r;
+    });
+  }
+
   const userName = AppState.currentUser ? AppState.currentUser.name : 'Patient';
   const phone = AppState.currentUser ? AppState.currentUser.phone : '';
   const email = AppState.currentUser ? AppState.currentUser.email : '';
 
-  container.innerHTML = scans.map(s => `
+  container.innerHTML = scans.map(s => {
+    const existingReport = reportsByScanId[s.id];
+    const pdfBtnOnClick = existingReport
+      ? `downloadReportFile('${existingReport.download_url}', '${escapeHtml(existingReport.file_name || 'PulseVision_Report.pdf')}')`
+      : `generateAndDownloadScanReport(${s.id})`;
+
+    return `
     <div class="glass-panel" style="padding: 1.25rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
       <div>
         <div style="font-size: 0.8rem; color: var(--text-muted);">${new Date(s.timestamp).toLocaleString()}</div>
@@ -3701,7 +3840,7 @@ function renderReportsList(scans) {
         </div>
       </div>
       <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-        <button class="btn btn-primary btn-sm" onclick="downloadCurrentReportPDF()">
+        <button class="btn btn-primary btn-sm" onclick="${pdfBtnOnClick}" title="Download ReportLab Clinical PDF">
           📄 PDF
         </button>
         <button class="btn btn-email btn-sm" onclick="sendSpecificEmail('${escapeHtml(email)}', '${escapeHtml(userName)}', ${s.bpm}, '${escapeHtml(s.classification)}', '${escapeHtml(s.stress_level)}', '${escapeHtml(s.fatigue_level)}')">
@@ -3715,7 +3854,8 @@ function renderReportsList(scans) {
         </button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function deleteScanRecord(scanId) {
@@ -4195,3 +4335,7 @@ function updateOverviewCards() {
     }
   }
 }
+
+window.downloadReportFile = downloadReportFile;
+window.generateAndDownloadScanReport = generateAndDownloadScanReport;
+window.downloadCurrentReportPDF = downloadCurrentReportPDF;
