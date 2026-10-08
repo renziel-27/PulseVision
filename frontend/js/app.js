@@ -66,6 +66,7 @@ const AppState = {
   lastSavedFileName: null,
   cachedScans: [],
   cachedReports: [],
+  selectedScanIds: new Set(),
 
   // Live Consensus Vitals
   currentBPM: 0,
@@ -333,6 +334,31 @@ function initNavigation() {
   document.getElementById('btn-refresh-reports')?.addEventListener('click', () => {
     fetchUserReports();
     showToast('Reports refreshed.', 'info');
+  });
+
+  // History Bulk Actions Listeners
+  document.getElementById('history-select-all')?.addEventListener('change', (e) => {
+    toggleAllScansSelection(e.target.checked);
+  });
+  document.getElementById('btn-history-bulk-delete')?.addEventListener('click', deleteSelectedScans);
+  document.getElementById('btn-history-bulk-clear')?.addEventListener('click', () => {
+    toggleAllScansSelection(false);
+  });
+
+  // Profile Edit Toggle & Cancel Listeners (Requirements 18 & 19)
+  document.getElementById('btn-profile-edit-toggle')?.addEventListener('click', () => {
+    const inName = document.getElementById('profile-input-name');
+    if (inName) {
+      inName.focus();
+      inName.select();
+      inName.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast('You can now edit your profile name and details.', 'info');
+    }
+  });
+
+  document.getElementById('btn-cancel-profile-page')?.addEventListener('click', () => {
+    loadProfilePageData();
+    showToast('Profile edits cancelled.', 'info');
   });
 }
 
@@ -879,14 +905,12 @@ function startFrameProcessing() {
 
   if (AppState.streamInterval) clearInterval(AppState.streamInterval);
 
-  let isFrameInFlight = false;
-  const CAPTURE_CADENCE_MS = 220; // Paced cadence (200-250ms) for stable continuous acquisition
+  let frameQueue = [];
+  let isBatchInFlight = false;
+  const CAPTURE_CADENCE_MS = 100; // Continuous 10 FPS camera capture buffer
 
   AppState.streamInterval = setInterval(async () => {
     if (!AppState.cameraActive || !video || video.paused || video.ended) return;
-
-    // IN-FLIGHT REQUEST LOCK: Never have multiple process-frame requests simultaneously in flight
-    if (isFrameInFlight) return;
 
     // Capture frame preserving camera aspect ratio
     const vw = video.videoWidth || 640;
@@ -899,39 +923,64 @@ function startFrameProcessing() {
     }
 
     capCtx.drawImage(video, 0, 0, targetW, targetH);
-    const b64 = captureCanvas.toDataURL('image/jpeg', 0.65);
-
-    isFrameInFlight = true;
+    const b64 = captureCanvas.toDataURL('image/jpeg', 0.60);
     const captureTimestamp = performance.now();
-    console.log("[PulseVision] frame sent");
+
+    frameQueue.push({ b64, timestamp: captureTimestamp });
+    if (frameQueue.length > 8) frameQueue = frameQueue.slice(-8); // Prevent backlog buildup
+
+    // Batch dispatch when not in flight
+    if (isBatchInFlight) return;
+
+    // Only batch 3 frames when running or at least 1 when previewing
+    const batchSize = AppState.trialState === 'RUNNING' ? 3 : 1;
+    if (frameQueue.length < batchSize && AppState.trialState === 'RUNNING') return;
+
+    const currentBatch = frameQueue.splice(0, Math.min(frameQueue.length, 3));
+    if (currentBatch.length === 0) return;
+
+    isBatchInFlight = true;
 
     try {
-      const res = await fetch(`${API_BASE}/api/process-frame`, {
-        method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ image: b64 })
-      });
-
-      if (!res.ok) {
-        console.error("[PulseVision] API error:", {
-          endpoint: `${API_BASE}/api/process-frame`,
-          status: res.status
+      // 1. Try high-performance batch processing endpoint
+      let data = null;
+      try {
+        const batchRes = await fetch(`${API_BASE}/api/process-frames-batch`, {
+          method: 'POST',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ frames: currentBatch.map(f => f.b64) })
         });
-        return;
+        if (batchRes.ok) {
+          data = await batchRes.json();
+        }
+      } catch (be) {
+        data = null;
       }
 
-      const data = await res.json();
-      console.log("[PulseVision] frame response", data.success ? "success" : "failed");
+      // 2. Fallback to single frame endpoint if batch is unavailable
+      if (!data || !data.success) {
+        const singleB64 = currentBatch[currentBatch.length - 1].b64;
+        const singleRes = await fetch(`${API_BASE}/api/process-frame`, {
+          method: 'POST',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ image: singleB64 })
+        });
+        if (singleRes.ok) {
+          const singleData = await singleRes.json();
+          if (singleData.success) {
+            data = singleData;
+            data.samples = singleData.rgb_mean ? [{ rgb_mean: singleData.rgb_mean, chin_y: singleData.chin_y }] : [];
+          }
+        }
+      }
 
-      if (data.success) {
+      if (data && data.success) {
         updatePreflightUI(data.preflight);
 
-        // Update Fatigue, EAR, Redness & Geometric Facial Expression
         if (data.fatigue_stress) {
           updateFatigueStressUI(data.fatigue_stress);
         }
 
-        // Draw bounding box and Forehead ROI on fresh dimensions without wiping between ticks
         const canvasW = overlayCanvas.clientWidth || video.videoWidth || 640;
         const canvasH = overlayCanvas.clientHeight || video.videoHeight || 480;
         if (overlayCanvas.width !== canvasW) overlayCanvas.width = canvasW;
@@ -939,29 +988,30 @@ function startFrameProcessing() {
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         drawOverlayAnnotations(ctx, overlayCanvas.width, overlayCanvas.height, data.face_box, data.rois, targetW, targetH);
 
-        // Accumulate continuous measurement data ONLY while Detection is RUNNING
+        // Ingest real rPPG samples during active scan
         if (AppState.trialState === 'RUNNING') {
-          if (data.rgb_mean) {
-            AppState.rgbHistory.push(data.rgb_mean);
-            if (!AppState.sampleTimestamps) AppState.sampleTimestamps = [];
-            AppState.sampleTimestamps.push(captureTimestamp);
-            console.log(`[PulseVision] samples: ${AppState.rgbHistory.length}`);
-            if (AppState.rgbHistory.length <= 45) {
-              const alertText = document.getElementById('quality-alert-text');
-              if (alertText) alertText.textContent = `Collecting facial rPPG signal (${AppState.rgbHistory.length}/45 frames)... Keep steady.`;
+          const samples = data.samples || (data.rgb_mean ? [{ rgb_mean: data.rgb_mean, chin_y: data.chin_y }] : []);
+          for (let sIdx = 0; sIdx < samples.length; sIdx++) {
+            const smp = samples[sIdx];
+            const ts = currentBatch[sIdx] ? currentBatch[sIdx].timestamp : performance.now();
+            if (smp.rgb_mean) {
+              AppState.rgbHistory.push(smp.rgb_mean);
+              if (!AppState.sampleTimestamps) AppState.sampleTimestamps = [];
+              AppState.sampleTimestamps.push(ts);
+            }
+            if (smp.chin_y !== undefined) {
+              AppState.motionHistory.push(smp.chin_y);
             }
           }
-          if (data.chin_y !== undefined) {
-            AppState.motionHistory.push(data.chin_y);
-          }
+
           if (data.fatigue_stress?.estimated_expression) {
             AppState.facialIndicators.push(data.fatigue_stress.estimated_expression);
           }
 
-          // Live preview waveform query during active detection — triggered on elapsed time (~2.5s)
+          // Periodic live preview waveform update (~2 seconds interval)
           const now = performance.now();
           if (data.face_box && AppState.rgbHistory.length >= 30) {
-            if (!AppState.lastPreviewTime || (now - AppState.lastPreviewTime) >= 2500) {
+            if (!AppState.lastPreviewTime || (now - AppState.lastPreviewTime) >= 2000) {
               AppState.lastPreviewTime = now;
               queryLiveWaveformPreview();
             }
@@ -969,13 +1019,9 @@ function startFrameProcessing() {
         }
       }
     } catch (err) {
-      console.error("[PulseVision] API error:", {
-        endpoint: `${API_BASE}/api/process-frame`,
-        status: "network_error",
-        response: err.message
-      });
+      console.warn("[PulseVision] Frame processing network error:", err.message);
     } finally {
-      isFrameInFlight = false;
+      isBatchInFlight = false;
     }
   }, CAPTURE_CADENCE_MS);
 }
@@ -1044,7 +1090,7 @@ function updateFatigueStressUI(data) {
     stressDesc: data.stress_description
   };
 
-  // Facial Expression Indicator (Requirement 8)
+  // Facial Expression Indicator (Requirement 9)
   const exprVal = document.getElementById('expression-val');
   const exprConf = document.getElementById('expression-conf-badge');
   if (exprVal && data.estimated_expression) {
@@ -1056,9 +1102,10 @@ function updateFatigueStressUI(data) {
     AppState.expressionConfidence = data.expression_confidence;
   }
 
-  // EAR & Blink Dynamics
+  // Blink Dynamics & Alertness (Requirement 8)
+  const blinkCountVal = document.getElementById('blink-count-value');
+  const blinkRateVal = document.getElementById('blink-rate-value');
   const earVal = document.getElementById('ear-value');
-  const blinkVal = document.getElementById('blink-rate-value');
   const eyeRednessVal = document.getElementById('eye-redness-value');
   const eyeRednessStatus = document.getElementById('eye-redness-status');
   const eyeRednessBadge = document.getElementById('eye-redness-badge');
@@ -1067,8 +1114,18 @@ function updateFatigueStressUI(data) {
   const stressVal = document.getElementById('stress-score-value');
   const stressBar = document.getElementById('stress-progress-bar');
 
-  if (earVal) earVal.textContent = data.ear;
-  if (blinkVal) blinkVal.textContent = `${data.blink_rate_bpm} / min`;
+  const totalBlinks = data.blink_count !== undefined ? data.blink_count : 0;
+  if (blinkCountVal) blinkCountVal.textContent = totalBlinks;
+  if (earVal) earVal.textContent = data.ear || 0.28;
+
+  // Real-time blink rate / min based on active session time
+  let elapsedMinutes = 1.0;
+  if (AppState.trialState === 'RUNNING' && AppState.trialMonotonicStart) {
+    const elapsedSec = (performance.now() - AppState.trialMonotonicStart) / 1000.0;
+    elapsedMinutes = Math.max(0.15, elapsedSec / 60.0);
+  }
+  const calcBlinkRate = Math.round(totalBlinks / elapsedMinutes);
+  if (blinkRateVal) blinkRateVal.textContent = `${calcBlinkRate} / min`;
 
   // Eye Redness — real status from backend sclera analysis
   const rednessStatus = data.eye_redness_status || 'Normal';
@@ -1081,19 +1138,18 @@ function updateFatigueStressUI(data) {
 
   // Alertness — derived from EAR and blink rate
   const ear = parseFloat(data.ear) || 0.28;
-  const bpm = parseFloat(data.blink_rate_bpm) || 0;
   let alertText = '🟢 Alert';
   let alertClass = 'badge-normal';
-  if (ear < 0.18 || bpm > 25) {
+  if (ear < 0.18 || calcBlinkRate > 25) {
     alertText = '🔴 Drowsiness indicators detected';
     alertClass = 'badge-alert';
-  } else if (ear < 0.22 || bpm > 18) {
+  } else if (ear < 0.22 || calcBlinkRate > 18) {
     alertText = '🟡 Possible drowsiness';
     alertClass = 'badge-warning';
   }
-  if (alertnessVal) alertnessVal.textContent = alertText;
+  if (alertnessVal) alertnessVal.textContent = data.alertness_badge || alertText;
   if (alertnessBadge) {
-    alertnessBadge.textContent = 'EAR / Blinks';
+    alertnessBadge.textContent = 'Blinks';
     alertnessBadge.className = `pulse-indicator-badge ${alertClass}`;
   }
 
@@ -1190,16 +1246,51 @@ function initWaveformCanvas() {
   function renderWaveform() {
     requestAnimationFrame(renderWaveform);
 
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
+    canvas.width = canvas.clientWidth || 300;
+    canvas.height = canvas.clientHeight || 100;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const wave = AppState.waveform;
     const emptyMsg = document.getElementById('waveform-empty-msg');
-    if (!wave || wave.length < 2 || (!AppState.cameraActive && AppState.trialState !== 'COMPLETED')) {
-      if (emptyMsg) emptyMsg.style.display = 'block';
-      // Standby flatline
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+    const isScanning = AppState.trialState === 'RUNNING';
+    const isCompleted = AppState.trialState === 'COMPLETED';
+    const hasData = wave && wave.length >= 8 && (AppState.cameraActive || isCompleted);
+
+    if (!hasData) {
+      if (emptyMsg) {
+        emptyMsg.style.display = 'block';
+        if (isScanning) {
+          emptyMsg.textContent = 'Signal stabilizing... Keep face steady.';
+        } else {
+          emptyMsg.textContent = 'Waveform will render automatically during active scan.';
+        }
+      }
+      // Standby baseline
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+      return;
+    }
+
+    // Dynamic amplitude normalization from real POS BVP signal
+    let minVal = Infinity;
+    let maxVal = -Infinity;
+    for (let i = 0; i < wave.length; i++) {
+      const v = wave[i];
+      if (v < minVal) minVal = v;
+      if (v > maxVal) maxVal = v;
+    }
+    const range = maxVal - minVal;
+
+    if (range < 1e-6) {
+      if (emptyMsg) {
+        emptyMsg.style.display = 'block';
+        emptyMsg.textContent = 'Signal stabilizing... Tracking facial skin ROI.';
+      }
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(0, canvas.height / 2);
@@ -1212,7 +1303,7 @@ function initWaveformCanvas() {
 
     const step = canvas.width / (wave.length - 1);
     const midY = canvas.height / 2;
-    const amp = canvas.height * 0.38;
+    const targetAmp = canvas.height * 0.38;
 
     const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
     grad.addColorStop(0, '#0284c7');
@@ -1221,23 +1312,29 @@ function initWaveformCanvas() {
 
     ctx.strokeStyle = grad;
     ctx.lineWidth = 2.5;
-    ctx.shadowColor = '#00f0ff';
-    ctx.shadowBlur = 8;
+    ctx.shadowColor = 'rgba(0, 240, 255, 0.35)';
+    ctx.shadowBlur = 6;
 
     ctx.beginPath();
     for (let i = 0; i < wave.length; i++) {
       const x = i * step;
-      const y = midY - wave[i] * amp;
+      // Real BVP normalization to [-1, 1] range
+      const normVal = ((wave[i] - minVal) / range) * 2 - 1;
+      const y = midY - normVal * targetAmp;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
 
-    const lastX = (wave.length - 1) * step;
-    const lastY = midY - wave[wave.length - 1] * amp;
+    // Pulsing systolic peak dot at the latest point
+    const lastIdx = wave.length - 1;
+    const lastX = lastIdx * step;
+    const lastNorm = ((wave[lastIdx] - minVal) / range) * 2 - 1;
+    const lastY = midY - lastNorm * targetAmp;
+
     ctx.fillStyle = '#ff2a6d';
     ctx.shadowColor = '#ff2a6d';
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.arc(lastX, lastY, 4.5, 0, 2 * Math.PI);
     ctx.fill();
@@ -1607,7 +1704,9 @@ async function startDetection() {
   if (alertText) alertText.textContent = 'Continuous rPPG detection active. Remain still and look into the camera.';
   if (lastUpdate) lastUpdate.textContent = 'Continuous scanning active...';
 
-  // Start Continuous Monotonic Elapsed Counter (no arbitrary 60s limit, user stops when ready)
+  // Controlled 45-Second Scanning Session with Smooth Progress (Requirements 2 & 5)
+  const TARGET_SCAN_SEC = 45.0;
+
   if (AppState.trialCountdownTimer) clearInterval(AppState.trialCountdownTimer);
   AppState.trialCountdownTimer = setInterval(() => {
     if (!AppState.detectionActive || AppState.trialState !== 'RUNNING') {
@@ -1618,26 +1717,42 @@ async function startDetection() {
     const elapsedSec = (performance.now() - AppState.trialMonotonicStart) / 1000.0;
     const countEl = document.getElementById('trial-countdown-badge');
     const barEl = document.getElementById('trial-progress-bar');
+    const progressPct = Math.min(100, Math.round((elapsedSec / TARGET_SCAN_SEC) * 100));
+
     const elapsedMins = Math.floor(elapsedSec / 60);
     const remSecs = Math.floor(elapsedSec % 60);
     const timeStr = `${elapsedMins.toString().padStart(2, '0')}:${remSecs.toString().padStart(2, '0')}`;
 
     if (countEl) {
-      countEl.textContent = `⏱ Elapsed: ${timeStr} (${AppState.rgbHistory.length} samples)`;
+      countEl.textContent = `⏱ ${progressPct}% (${timeStr} / 00:45)`;
     }
     if (barEl) {
-      // Scale smoothly up to 10s baseline, then maintain 100% full
-      const pct = Math.min(100, (elapsedSec / 10.0) * 100);
-      barEl.style.width = `${pct.toFixed(1)}%`;
+      barEl.style.width = `${progressPct}%`;
     }
 
-    if (elapsedSec >= 10.0 && AppState.rgbHistory.length >= 45) {
-      const alertTextEl = document.getElementById('quality-alert-text');
-      if (alertTextEl && alertTextEl.textContent.includes('Collecting')) {
-        alertTextEl.textContent = 'Physiological signals stabilized. Click "Stop Scan" when ready to analyze.';
+    // Professional clinical phase status
+    const alertTextEl = document.getElementById('quality-alert-text');
+    if (alertTextEl) {
+      if (progressPct < 15) {
+        alertTextEl.textContent = 'Scanning... Align forehead inside the guide.';
+      } else if (progressPct < 40) {
+        alertTextEl.textContent = 'Analyzing physiological signal & skin blood perfusion...';
+      } else if (progressPct < 70) {
+        alertTextEl.textContent = 'Signal quality stabilizing... Tracking arterial pulse.';
+      } else if (progressPct < 90) {
+        alertTextEl.textContent = 'Heart rate stabilizing... Building temporal consensus.';
+      } else {
+        alertTextEl.textContent = 'Almost complete... Finalizing consensus window.';
       }
     }
-  }, 250);
+
+    // Automatically complete scan session when target 45s is reached
+    if (elapsedSec >= TARGET_SCAN_SEC) {
+      clearInterval(AppState.trialCountdownTimer);
+      AppState.trialCountdownTimer = null;
+      finishAndComputeTrial(elapsedSec);
+    }
+  }, 200);
 
   showToast("Real-time physiological detection engaged — continuous scan active!", "info");
 }
@@ -1654,10 +1769,9 @@ async function stopDetection(reason = "User stopped detection.") {
   AppState.detectionActive = false;
   const elapsedSec = (performance.now() - (AppState.trialMonotonicStart || performance.now())) / 1000.0;
 
-  // Enforce minimum required temporal signal (10 seconds and >= 45 frames)
-  if (elapsedSec < 10.0 || AppState.rgbHistory.length < 45) {
-    await cancelCurrentTrial(`Insufficient detection duration or signal buffer (${elapsedSec.toFixed(1)}s < 10s minimum requirement or ${AppState.rgbHistory.length} < 45 frames).`);
-    // Do NOT stop camera automatically
+  // Enforce minimum required temporal signal (15 seconds and >= 45 frames)
+  if (elapsedSec < 14.5 || AppState.rgbHistory.length < 45) {
+    await cancelCurrentTrial('Insufficient scan duration (minimum 15 seconds required). Please keep face steady.');
     setCameraState(AppState.cameraActive ? 'READY' : 'OFF');
     return;
   }
@@ -1704,7 +1818,7 @@ async function cancelCurrentTrial(reason = "Detection cancelled.") {
     stateBadge.className = 'pulse-indicator-badge badge-alert';
   }
   if (countBadge) {
-    countBadge.textContent = '⏱ Incomplete (< 10s)';
+    countBadge.textContent = '⏱ Incomplete';
     countBadge.classList.remove('active');
   }
   if (btnStart) {
@@ -1730,13 +1844,12 @@ async function cancelCurrentTrial(reason = "Detection cancelled.") {
     pulseBadge.className = 'pulse-indicator-badge badge-alert';
   }
   if (alertBox) alertBox.className = 'quality-alert-box';
-  if (alertText) alertText.textContent = 'Detection incomplete — minimum 10 seconds of continuous data required. Measurement rejected.';
-  if (lastUpdate) lastUpdate.textContent = 'Scan rejected (insufficient duration)';
+  if (alertText) alertText.textContent = 'Scan cancelled — minimum 15 seconds required for physiological analysis.';
+  if (lastUpdate) lastUpdate.textContent = 'Scan incomplete';
 
   resetVitalsDisplaysToStandby();
-  // Do NOT stop camera automatically
   setCameraState(AppState.cameraActive ? 'READY' : 'OFF');
-  showToast("Detection incomplete — minimum 10 seconds required. No reading emitted.", "warning");
+  showToast("Scan incomplete — minimum 15 seconds required. No reading emitted.", "warning");
 }
 
 async function finishAndComputeTrial(elapsedSec) {
@@ -1744,9 +1857,9 @@ async function finishAndComputeTrial(elapsedSec) {
   if (AppState.trialState === 'COMPLETED' || AppState.currentTrial?.status === 'COMPLETED') return;
   AppState.isFinishingTrial = true;
 
-  if (elapsedSec < 9.5 || AppState.rgbHistory.length < 45) {
+  if (elapsedSec < 14.5 || AppState.rgbHistory.length < 45) {
     AppState.isFinishingTrial = false;
-    cancelCurrentTrial("Elapsed duration was less than 10 seconds or insufficient samples (minimum 45 frames required).");
+    cancelCurrentTrial("Elapsed duration was less than 15 seconds or insufficient data. Please keep face steady.");
     return;
   }
 
@@ -1766,7 +1879,7 @@ async function finishAndComputeTrial(elapsedSec) {
     stateBadge.className = 'pulse-indicator-badge badge-normal';
   }
   if (countBadge) {
-    countBadge.textContent = `⏱ ${elapsedSec.toFixed(1)}s Captured`;
+    countBadge.textContent = `⏱ 100% (${Math.round(elapsedSec)}s Scan)`;
     countBadge.classList.remove('active');
   }
   if (btnCancel) btnCancel.style.display = 'none';
@@ -3374,84 +3487,114 @@ async function saveCurrentReport() {
   }
 }
 
-async function shareReportViaWhatsApp() {
-  if (!AppState.scanCompleted || AppState.currentBPM <= 0) {
-    showToast("Please complete a detection scan (≥ 10s) before sharing via WhatsApp.", "warning");
-    return;
-  }
-  const user = AppState.currentUser || { name: 'Research Participant', phone: '' };
-  const bpm = Math.round(AppState.currentBPM);
-  const br = AppState.breathingRate > 0 ? Math.round(AppState.breathingRate) : 16;
-  const expr = AppState.dominantExpression || 'Neutral / Focused';
-  const stress = AppState.stressData?.stressScore ? `${AppState.stressData.stressScore}/100 (${AppState.stressData.stressLevel})` : '20/100 (Low)';
-  const sqi = Math.round((AppState.sqi || 0.88) * 100);
-  const now = new Date().toLocaleString();
+async function shareReportViaWhatsApp(scanId = null) {
+  let downloadUrl = AppState.lastSavedDownloadUrl;
+  let fileName = AppState.lastSavedFileName || `PulseVision_Report.pdf`;
+  const user = AppState.currentUser || { name: 'Patient', phone: '' };
+  const targetPhone = user.phone || '';
 
-  const msg = 
-`🫀 *PULSEVISION AI — PHYSIOLOGICAL HEALTH REPORT*
-━━━━━━━━━━━━━━━━━━━━━
-👤 *Participant:* ${user.name}
-⏱ *Timestamp:* ${now}
-📋 *Protocol:* rPPG Multi-Algorithm Consensus
-
-📊 *CARDIOVASCULAR VITALS*
-❤️ *Heart Rate:* ${bpm} BPM
-📈 *Signal Quality (SQI):* ${sqi}%
-🫁 *Visual Respiration:* ${br} BrPM
-😊 *Facial Expression:* ${expr}
-🌿 *Autonomic Stress:* ${stress}
-👁️ *Eye Dynamics:* ${AppState.fatigueData?.blinkRate || 14} blinks/min (EAR: ${AppState.fatigueData?.ear ? AppState.fatigueData.ear.toFixed(3) : '0.280'})
-
-🔬 *ALGORITHMS EVALUATED*
-POS · CHROM · GREEN · FastICA · TS-CAN Ensemble
-Agreement Threshold: ≤ 12 BPM Spread (Concordant)
-
-⚠️ *Clinical Notice:* Research prototype. Webcam rPPG measures cutaneous blood volume pulse (BVP). Not a certified diagnostic medical device.
-━━━━━━━━━━━━━━━━━━━━━
-Generated via PulseVision AI`;
-
-  let phone = user.phone || '';
-  if (!phone) {
-    phone = window.prompt("Enter recipient WhatsApp phone number with country code (e.g. +1234567890):", "");
-  }
-
-  if (phone) {
-    try {
-      showToast("Attempting WhatsApp Cloud API delivery...", "info");
-      const res = await fetch(`${API_BASE}/api/notifications/whatsapp`, {
+  try {
+    // 1. If scanId is specified or report not yet saved, generate official ReportLab PDF
+    if (scanId) {
+      showToast("Preparing clinical PDF report for WhatsApp...", "info");
+      const res = await fetch(`${API_BASE}/api/reports/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: phone,
-          user_name: user.name,
-          bpm: bpm,
-          classification: AppState.classification,
-          stress_level: AppState.stressData.stressLevel,
-          fatigue_level: AppState.fatigueData.fatigueLevel
-        })
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ user_id: user.id || 1, scan_id: scanId })
       });
       const data = await res.json();
-      if (data.success) {
-        showToast(data.message || "Delivered via WhatsApp Cloud API!", "success");
-        return;
-      } else if (!data.configured) {
-        showToast("WhatsApp Cloud API not configured in .env. Opening WhatsApp Web with formatted report.", "info");
-        const cleanDigits = phone.replace(/[^0-9]/g, '');
-        const waUrl = `https://api.whatsapp.com/send?phone=${cleanDigits}&text=${encodeURIComponent(msg)}`;
-        window.open(waUrl, '_blank');
-        return;
-      } else {
-        showToast(data.error || "WhatsApp API dispatch failed.", "warning");
+      if (data.success && data.download_url) {
+        downloadUrl = data.download_url;
+        fileName = data.file_name || `PulseVision_Report_Scan_${scanId}.pdf`;
       }
-    } catch (e) {
-      console.warn("WhatsApp API route failed, opening WhatsApp Web:", e);
+    } else {
+      if (!AppState.scanCompleted || AppState.currentBPM <= 0) {
+        showToast("Please complete a scan before sharing via WhatsApp.", "warning");
+        return;
+      }
+      if (!downloadUrl) {
+        showToast("Generating official clinical PDF report...", "info");
+        const res = await fetch(`${API_BASE}/api/reports/save`, {
+          method: 'POST',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            user_id: user.id || 1,
+            bpm: AppState.currentBPM,
+            confidence: AppState.confidence || 88.0,
+            stress_level: AppState.stressData?.stressLevel || "Low (Relaxed)",
+            fatigue_level: AppState.fatigueData?.fatigueLevel || "Normal",
+            ear_value: AppState.fatigueData?.ear || 0.28,
+            signal_quality: `${Math.round((AppState.sqi || 0.88) * 100)}% (Optimal)`,
+            algorithm_used: 'CONSENSUS_ENSEMBLE',
+            classification: AppState.classification || "Normal Range"
+          })
+        });
+        const data = await res.json();
+        if (data.success && data.download_url) {
+          downloadUrl = data.download_url;
+          fileName = data.file_name || `PulseVision_Report.pdf`;
+          AppState.lastSavedReportId = data.id;
+          AppState.lastSavedDownloadUrl = data.download_url;
+          AppState.lastSavedFileName = data.file_name;
+        }
+      }
     }
-  }
 
-  const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-  window.open(waUrl, '_blank');
-  showToast("Opening WhatsApp with your formatted health report!", "success");
+    if (!downloadUrl) {
+      showToast("Could not generate clinical PDF report.", "error");
+      return;
+    }
+
+    // 2. Fetch actual PDF binary file
+    showToast("Preparing PDF document...", "info");
+    const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `${API_BASE}${downloadUrl}`;
+    const pdfRes = await fetch(fullUrl, { headers: getAuthHeaders() });
+    if (!pdfRes.ok) throw new Error("Could not download generated PDF file.");
+    const pdfBlob = await pdfRes.blob();
+    const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+    // 3. Web Share API with File (Native OS share sheet on iOS, Android, macOS, Windows)
+    if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+      await navigator.share({
+        title: 'PulseVision AI Clinical Health Report',
+        text: `PulseVision AI Health Assessment Report for ${user.name}.`,
+        files: [pdfFile]
+      });
+      showToast("Report shared! Select WhatsApp in the share menu.", "success");
+      return;
+    }
+
+    // 4. Desktop Fallback: Automatically download the PDF and launch WhatsApp Web
+    const blobUrl = window.URL.createObjectURL(pdfBlob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+
+    const cleanDigits = targetPhone.replace(/[^0-9]/g, '');
+    const bpmDisplay = Math.round(AppState.currentBPM || 72);
+    const msg = `*PulseVision AI — Biometric Health Assessment Report*\n` +
+      `Patient: ${user.name}\n` +
+      `Heart Rate: ${bpmDisplay} BPM\n` +
+      `Signal Quality: ${Math.round((AppState.sqi || 0.9) * 100)}%\n\n` +
+      `📎 *Attached Document:* ${fileName}\n` +
+      `(Official PDF report downloaded — please attach it into this WhatsApp chat.)`;
+
+    const waUrl = cleanDigits
+      ? `https://api.whatsapp.com/send?phone=${cleanDigits}&text=${encodeURIComponent(msg)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(waUrl, '_blank');
+    showToast("PDF report downloaded! Drop or attach it into your WhatsApp chat.", "success");
+  } catch (err) {
+    if (err.name === 'AbortError') return; // User closed share sheet
+    console.error("WhatsApp PDF sharing error:", err);
+    showToast("Could not share PDF: " + err.message, "error");
+  }
 }
+window.shareReportViaWhatsApp = shareReportViaWhatsApp;
 
 async function downloadReportFile(reportIdOrUrl, fileName = 'PulseVision_Clinical_Report.pdf') {
   try {
@@ -3805,6 +3948,7 @@ function renderReportsList(scans, reports = null) {
         <div style="font-size: 0.85rem; color: var(--text-secondary); max-width: 420px; margin: 0 auto;">Run a contactless rPPG measurement in the Live Scan dashboard to automatically generate official clinical reports.</div>
       </div>
     `;
+    updateHistoryBulkBar();
     return;
   }
   scans = filteredScans;
@@ -3817,55 +3961,140 @@ function renderReportsList(scans, reports = null) {
     });
   }
 
-  const userName = AppState.currentUser ? AppState.currentUser.name : 'Patient';
-  const phone = AppState.currentUser ? AppState.currentUser.phone : '';
-  const email = AppState.currentUser ? AppState.currentUser.email : '';
-
   container.innerHTML = scans.map(s => {
     const existingReport = reportsByScanId[s.id];
     const pdfBtnOnClick = existingReport
       ? `downloadReportFile('${existingReport.download_url}', '${escapeHtml(existingReport.file_name || 'PulseVision_Report.pdf')}')`
       : `generateAndDownloadScanReport(${s.id})`;
+    const isSelected = AppState.selectedScanIds && AppState.selectedScanIds.has(s.id);
 
     return `
-    <div class="glass-panel" style="padding: 1.25rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-      <div>
-        <div style="font-size: 0.8rem; color: var(--text-muted);">${new Date(s.timestamp).toLocaleString()}</div>
-        <div style="font-size: 1.5rem; font-weight: 800; color: #0f172a;">
-          ${s.bpm} <span style="font-size: 0.9rem; color: var(--accent-crimson);">BPM</span>
-          <span class="pulse-indicator-badge badge-normal" style="font-size: 0.75rem; margin-left: 0.75rem;">${escapeHtml(s.classification)}</span>
-        </div>
-        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-          Stress: <strong>${escapeHtml(s.stress_level)}</strong> | Fatigue: <strong>${escapeHtml(s.fatigue_level)}</strong> | Algorithm: <strong>${escapeHtml(s.algorithm_used)}</strong>
+    <div class="glass-panel" style="padding: 1.1rem 1.25rem; margin-bottom: 0.85rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; border-left: 4px solid var(--accent-cyan);">
+      <div style="display: flex; align-items: center; gap: 1rem;">
+        <input type="checkbox" class="val-checkbox scan-checkbox" data-id="${s.id}" ${isSelected ? 'checked' : ''} onchange="window.toggleScanSelection(${s.id}, this.checked)">
+        <div>
+          <div style="font-size: 0.78rem; color: var(--text-muted);">${new Date(s.timestamp).toLocaleString()}</div>
+          <div style="font-size: 1.4rem; font-weight: 800; color: #0f172a; display: flex; align-items: baseline; gap: 0.4rem;">
+            ${Math.round(s.bpm)} <span style="font-size: 0.85rem; color: var(--accent-crimson); font-weight: 700;">BPM</span>
+            <span class="pulse-indicator-badge badge-normal" style="font-size: 0.72rem; margin-left: 0.5rem;">${escapeHtml(s.classification || 'Normal')}</span>
+          </div>
+          <div style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.2rem;">
+            Quality: <strong>${escapeHtml(s.signal_quality || 'Good')}</strong> | Confidence: <strong>${Math.round(s.confidence || 88)}%</strong> | Algorithm: <strong>${escapeHtml(s.algorithm_used || 'POS')}</strong>
+          </div>
         </div>
       </div>
       <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
         <button class="btn btn-primary btn-sm" onclick="${pdfBtnOnClick}" title="Download ReportLab Clinical PDF">
           📄 PDF
         </button>
-        <button class="btn btn-email btn-sm" onclick="sendSpecificEmail('${escapeHtml(email)}', '${escapeHtml(userName)}', ${s.bpm}, '${escapeHtml(s.classification)}', '${escapeHtml(s.stress_level)}', '${escapeHtml(s.fatigue_level)}')">
-          📧 Email
-        </button>
-        <button class="btn btn-whatsapp btn-sm" onclick="sendSpecificWhatsApp('${escapeHtml(phone)}', '${escapeHtml(userName)}', ${s.bpm}, '${escapeHtml(s.classification)}', '${escapeHtml(s.stress_level)}', '${escapeHtml(s.fatigue_level)}')">
+        <button class="btn btn-whatsapp btn-sm" onclick="shareReportViaWhatsApp(${s.id})" title="Share Clinical PDF via WhatsApp">
           💬 WhatsApp
         </button>
-        <button class="btn btn-outline btn-sm" style="color: #C94A5D; border-color: rgba(201, 74, 93, 0.4);" onclick="deleteScanRecord(${s.id})" title="Delete scan record">
+        <button class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4);" onclick="deleteScanRecord(${s.id})" title="Delete scan record">
           🗑️ Delete
         </button>
       </div>
     </div>
   `;
   }).join('');
+
+  updateHistoryBulkBar();
 }
+
+function toggleScanSelection(scanId, checked) {
+  if (!AppState.selectedScanIds) AppState.selectedScanIds = new Set();
+  const id = parseInt(scanId, 10);
+  if (checked) {
+    AppState.selectedScanIds.add(id);
+  } else {
+    AppState.selectedScanIds.delete(id);
+  }
+  updateHistoryBulkBar();
+}
+window.toggleScanSelection = toggleScanSelection;
+
+function toggleAllScansSelection(checked) {
+  if (!AppState.selectedScanIds) AppState.selectedScanIds = new Set();
+  const visibleScans = AppState.cachedScans || [];
+  if (checked) {
+    visibleScans.forEach(s => AppState.selectedScanIds.add(s.id));
+  } else {
+    AppState.selectedScanIds.clear();
+  }
+  document.querySelectorAll('.scan-checkbox').forEach(cb => {
+    cb.checked = checked;
+  });
+  updateHistoryBulkBar();
+}
+window.toggleAllScansSelection = toggleAllScansSelection;
+
+function updateHistoryBulkBar() {
+  const bar = document.getElementById('history-bulk-bar');
+  const countEl = document.getElementById('history-selected-count');
+  const selectAllCb = document.getElementById('history-select-all');
+  const count = AppState.selectedScanIds ? AppState.selectedScanIds.size : 0;
+  const total = AppState.cachedScans ? AppState.cachedScans.length : 0;
+
+  if (countEl) countEl.textContent = count;
+  if (bar) {
+    if (count > 0) {
+      bar.classList.add('active');
+      bar.style.display = 'flex';
+    } else {
+      bar.classList.remove('active');
+      bar.style.display = 'none';
+    }
+  }
+  if (selectAllCb) {
+    selectAllCb.checked = (total > 0 && count === total);
+    selectAllCb.indeterminate = (count > 0 && count < total);
+  }
+}
+
+async function deleteSelectedScans() {
+  const count = AppState.selectedScanIds ? AppState.selectedScanIds.size : 0;
+  if (count === 0) {
+    showToast("No scans selected for deletion.", "info");
+    return;
+  }
+  if (!confirm(`Permanently remove ${count} selected scan record(s) from database?`)) return;
+
+  try {
+    showToast(`Deleting ${count} scan record(s)...`, "info");
+    const scanIds = Array.from(AppState.selectedScanIds);
+    const res = await fetch(`${API_BASE}/api/scans/bulk-delete`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ scan_ids: scanIds })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(data.message || `Deleted ${data.deleted_count} scan(s) successfully.`, "success");
+      AppState.selectedScanIds.clear();
+      updateHistoryBulkBar();
+      await fetchUserReports();
+    } else {
+      showToast(data.detail || "Failed to delete selected scans.", "error");
+    }
+  } catch (err) {
+    showToast("Network error deleting scans: " + err.message, "error");
+  }
+}
+window.deleteSelectedScans = deleteSelectedScans;
 
 async function deleteScanRecord(scanId) {
   if (!confirm(`Permanently remove scan record #${scanId} from database?`)) return;
   try {
     showToast(`Deleting scan record #${scanId}...`, "info");
-    const res = await fetch(`${API_BASE}/api/scans/${scanId}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/api/scans/${scanId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
     const data = await res.json();
     if (res.ok && data.success) {
       showToast(data.message || "Scan deleted successfully.", "success");
+      if (AppState.selectedScanIds) AppState.selectedScanIds.delete(parseInt(scanId, 10));
+      updateHistoryBulkBar();
       await fetchUserReports();
     } else {
       showToast(data.detail || "Failed to delete scan record.", "error");

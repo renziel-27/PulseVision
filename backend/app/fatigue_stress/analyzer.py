@@ -18,6 +18,15 @@ class FatigueAndStressAnalyzer:
         self.closed_frames_total = 0
         self.total_frames_analyzed = 0
 
+    def reset(self):
+        """Resets blink counters, state machine, and rolling histories for a new scan session."""
+        self.frame_counter = 0
+        self.blink_count = 0
+        self.blink_history.clear()
+        self.ear_history.clear()
+        self.closed_frames_total = 0
+        self.total_frames_analyzed = 0
+
     def calculate_ear(self, eye_pts):
         """
         Calculates Eye Aspect Ratio (EAR) from 6 2D facial landmark points.

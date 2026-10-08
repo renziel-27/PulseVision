@@ -429,21 +429,21 @@
               </div>
             </div>
 
-            <!-- Alertness / Drowsiness (EAR + Blinks) -->
+            <!-- Alertness / Drowsiness (Blink Dynamics) -->
             <div class="metric-card">
               <div class="metric-header">
                 <span class="metric-title">⚡ Alertness</span>
-                <span id="alertness-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">EAR / Blinks</span>
+                <span id="alertness-badge" class="pulse-indicator-badge badge-normal" style="font-size: 0.68rem;">Blinks</span>
               </div>
               <div style="margin: 0.2rem 0;">
                 <div id="alertness-val" style="font-size: 0.95rem; font-weight: 700; color: #0f172a;">🟢 Alert</div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-muted); margin-top: 0.15rem;">
-                  <span>EAR: <strong id="ear-value" class="mono" style="color: #0f172a;">0.28</strong></span>
-                  <span>Blinks: <strong id="blink-rate-value" class="mono" style="color: var(--accent-cyan);">0</strong></span>
+                  <span>Blinks: <strong id="blink-count-value" class="mono" style="color: #0f172a;">0</strong></span>
+                  <span>Rate: <strong id="blink-rate-value" class="mono" style="color: var(--accent-cyan);">--/min</strong></span>
                 </div>
               </div>
               <div style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.2;">
-                Webcam estimated alertness.
+                Facial landmark blink dynamic.
               </div>
             </div>
 
@@ -1268,7 +1268,6 @@
               <div class="er-field"><span class="er-pk">PK id</span><span>INT</span></div>
               <div class="er-field"><span>file_path</span><span>VARCHAR</span></div>
               <div class="er-field"><span>email_logs</span><span>TABLE</span></div>
-              <div class="er-field"><span>sms_logs</span><span>TABLE</span></div>
               <div class="er-field"><span>created_at</span><span>DATETIME</span></div>
             </div>
           </div>
@@ -1349,6 +1348,25 @@
         </div>
       </div>
 
+      <!-- Contextual Bulk Actions Bar for Scans History -->
+      <div id="history-bulk-bar" class="val-bulk-bar">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <input type="checkbox" id="history-select-all" class="val-checkbox" title="Select / Deselect all scans">
+          <span style="font-size: 0.8rem; font-weight: 700; color: var(--accent-cyan);">
+            Selected: <span id="history-selected-count">0</span>
+          </span>
+          <span style="font-size: 0.72rem; color: var(--text-muted);">scans</span>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button id="btn-history-bulk-delete" class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4); font-size: 0.74rem;">
+            🗑️ Delete Selected
+          </button>
+          <button id="btn-history-bulk-clear" class="btn btn-outline btn-sm" style="font-size: 0.74rem;">
+            ✕ Clear
+          </button>
+        </div>
+      </div>
+
       <div id="scans-history-container">
         <!-- Rendered dynamically -->
       </div>
@@ -1387,17 +1405,16 @@
           <div class="profile-card-meta">
             <div class="meta-row">
               <span class="meta-title">Account Status</span>
-              <span class="meta-data text-emerald">Active • Synced</span>
+              <span class="meta-data text-emerald">Active • Verified</span>
             </div>
             <div class="meta-row">
-              <span class="meta-title">Database Storage</span>
-              <span class="meta-data">MySQL Persistent</span>
-            </div>
-            <div class="meta-row">
-              <span class="meta-title">Member ID</span>
-              <span class="meta-data" id="profile-card-userid">UID-4</span>
+              <span class="meta-title">Biometric Protocol</span>
+              <span class="meta-data">rPPG Contactless</span>
             </div>
           </div>
+          <button type="button" id="btn-profile-edit-toggle" class="btn btn-outline btn-sm" style="width: 100%; margin-top: 1rem;">
+            ✏️ Edit Profile
+          </button>
         </div>
 
         <!-- Right: Edit Demographics Form Card -->
@@ -1449,10 +1466,13 @@
 
             <div id="profile-save-feedback" class="profile-feedback-box" style="display: none;"></div>
 
-            <div class="profile-form-actions">
-              <button type="submit" id="btn-save-profile-page" class="btn-primary-matte">
+            <div class="profile-form-actions" style="display: flex; gap: 0.75rem;">
+              <button type="submit" id="btn-save-profile-page" class="btn-primary-matte" style="flex: 1;">
                 <span>💾</span>
                 <span>Save Profile Changes</span>
+              </button>
+              <button type="button" id="btn-cancel-profile-page" class="btn btn-outline" style="flex: 0.5;">
+                Cancel
               </button>
             </div>
           </form>
@@ -1630,15 +1650,12 @@
       </div>
 
       <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.85rem; margin-bottom: 1.25rem;">
-        <div style="font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.4rem;">Active Backend Services</div>
+        <div style="font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.4rem;">System Status</div>
         <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
-          <span>Core API:</span> <strong style="color: #1d4ed8;">http://127.0.0.1:8000</strong>
-        </div>
-        <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
-          <span>MySQL Database:</span> <strong style="color: var(--accent-emerald);">Connected (3306)</strong>
+          <span>Service Connection:</span> <strong style="color: var(--accent-emerald);">🟢 Online & Synced</strong>
         </div>
         <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary);">
-          <span>rPPG Ensemble:</span> <strong style="color: var(--accent-cyan);">POS · CHROM · GREEN · FastICA · TS-CAN</strong>
+          <span>Biometric Engine:</span> <strong style="color: var(--accent-cyan);">PulseVision Multi-Algorithm Consensus</strong>
         </div>
       </div>
 

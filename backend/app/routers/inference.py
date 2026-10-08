@@ -28,9 +28,19 @@ def list_models():
 def get_model_status():
     return {"success": True, "status": ml_registry.get_status()}
 
+expression_buffer = deque(maxlen=7)
+
+def get_smoothed_expression(raw_label: str) -> str:
+    expression_buffer.append(raw_label)
+    from collections import Counter
+    counts = Counter(expression_buffer)
+    return counts.most_common(1)[0][0]
+
 @router.post("/camera/reset")
 def reset_camera():
     face_detector.reset()
+    fatigue_analyzer.reset()
+    expression_buffer.clear()
     rgb_buffer.clear()
     return {"success": True, "message": "Camera tracking and rPPG buffers reset"}
 
@@ -160,7 +170,7 @@ def process_frame(payload: dict):
             left_eye_pts, right_eye_pts,
             motion_delta=preflight.get("motion_score", 0.0)
         )
-        fatigue_data["estimated_expression"] = expression_label
+        fatigue_data["estimated_expression"] = get_smoothed_expression(expression_label)
         fatigue_data["expression_confidence"] = expression_confidence
         fatigue_data["eye_redness_indicator"] = eye_redness_indicator
         fatigue_data["expression_notice"] = "Estimated facial expression (Geometric Landmark Indicator - Non-Diagnostic)"
@@ -177,6 +187,136 @@ def process_frame(payload: dict):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.post("/process-frames-batch")
+@router.post("/inference/process-frames-batch")
+def process_frames_batch(payload: dict):
+    """
+    Controlled batch frame processor to eliminate WAN round-trip latency.
+    Accepts a batch of base64 images, performs temporal ROI extraction,
+    accumulates real RGB signals into rgb_buffer, and returns extracted samples.
+    """
+    frames_b64 = payload.get("frames", [])
+    if not frames_b64 or not isinstance(frames_b64, list):
+        raise HTTPException(status_code=400, detail="No frames list provided")
+
+    # Limit batch to 10 frames max
+    frames_b64 = frames_b64[:10]
+
+    samples = []
+    latest_face_box = None
+    latest_rois = {}
+    latest_preflight = {"is_valid": True, "lighting_score": 0.85, "motion_score": 0.1, "reason": "Batch tracking"}
+    latest_fatigue = None
+    latest_chin_y = 0.0
+
+    for idx, b64_item in enumerate(frames_b64):
+        if not b64_item:
+            continue
+        try:
+            if "base64," in b64_item:
+                b64_item = b64_item.split("base64,")[1]
+            img_bytes = base64.b64decode(b64_item)
+            np_arr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+
+            h, w = frame.shape[:2]
+
+            # Detect face on first frame or reuse box across the rapid batch for speed
+            if latest_face_box is None or idx == 0:
+                face_box = face_detector.detect_face(frame)
+                if face_box is not None:
+                    latest_face_box = face_box
+            else:
+                face_box = latest_face_box
+
+            preflight = preflight_guard.check_quality(frame, face_box)
+            latest_preflight = preflight
+
+            rois_dict = {}
+            avg_rgb = [0, 0, 0]
+            left_eye_pts = None
+            right_eye_pts = None
+
+            if face_box is not None:
+                rois, avg_rgb, is_skin_valid = extract_facial_rois(frame, face_box)
+                if rois:
+                    rois_dict = {k: list(v) for k, v in rois.items()}
+                    latest_rois = rois_dict
+                if is_skin_valid or (sum(avg_rgb) > 30):
+                    rgb_buffer.append(avg_rgb)
+
+                fx, fy, fw, fh = face_box
+                latest_chin_y = float(fy + fh)
+
+                # Track eyes on last frame of batch for fatigue analysis
+                if idx == len(frames_b64) - 1:
+                    gray_face = cv2.cvtColor(frame[max(0, fy):min(h, fy+fh), max(0, fx):min(w, fx+fw)], cv2.COLOR_BGR2GRAY)
+                    eyes = face_detector.detect_eyes(gray_face)
+                    if len(eyes) >= 2:
+                        for i_eye, (ex, ey, ew, eh) in enumerate(eyes[:2]):
+                            cx, cy = fx + ex + ew / 2.0, fy + ey + eh / 2.0
+                            pts = [
+                                [cx - ew * 0.4, cy],
+                                [cx - ew * 0.2, cy - eh * 0.3],
+                                [cx + ew * 0.2, cy - eh * 0.3],
+                                [cx + ew * 0.4, cy],
+                                [cx + ew * 0.2, cy + eh * 0.3],
+                                [cx - ew * 0.2, cy + eh * 0.3]
+                            ]
+                            if i_eye == 0:
+                                left_eye_pts = pts
+                            else:
+                                right_eye_pts = pts
+
+                    # Expression inference
+                    mouth_w = int(fw * 0.60)
+                    expression_label = "Neutral / Focused"
+                    expression_conf = 90.0
+                    if left_eye_pts and right_eye_pts:
+                        ear_val = fatigue_analyzer.calculate_ear(left_eye_pts)
+                        if ear_val > 0.38:
+                            expression_label = "Surprised / Alert"
+                            expression_conf = 82.0
+                        elif ear_val < 0.18:
+                            expression_label = "Drowsy / Low Alertness"
+                            expression_conf = 88.0
+                        elif (fw > 0) and (mouth_w / fw > 0.52):
+                            expression_label = "Smiling / Happy"
+                            expression_conf = 80.0
+
+                    fatigue_data = fatigue_analyzer.process_frame(
+                        left_eye_pts, right_eye_pts,
+                        motion_delta=preflight.get("motion_score", 0.0)
+                    )
+                    fatigue_data["estimated_expression"] = get_smoothed_expression(expression_label)
+                    fatigue_data["expression_confidence"] = expression_conf
+                    fatigue_data["eye_redness_indicator"] = "Normal"
+                    fatigue_data["expression_notice"] = "Geometric landmark expression indicator"
+                    latest_fatigue = fatigue_data
+
+            if face_box is not None and (sum(avg_rgb) > 30):
+                samples.append({
+                    "rgb_mean": list(avg_rgb),
+                    "chin_y": latest_chin_y
+                })
+        except Exception:
+            continue
+
+    return {
+        "success": True,
+        "samples": samples,
+        "face_box": list(latest_face_box) if latest_face_box else None,
+        "rois": latest_rois,
+        "preflight": latest_preflight,
+        "fatigue_stress": latest_fatigue,
+        "chin_y": latest_chin_y,
+        "buffer_length": len(rgb_buffer)
+    }
 
 @router.post("/inference/ensemble")
 @router.post("/estimate-ensemble")

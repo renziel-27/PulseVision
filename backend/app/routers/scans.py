@@ -1,3 +1,4 @@
+from pydantic import BaseModel
 import io
 import csv
 from datetime import datetime
@@ -130,12 +131,26 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db), current_user: User 
         db.commit()
     return {"success": True, "message": "Scan cancelled."}
 
+class BulkDeleteScansRequest(BaseModel):
+    scan_ids: List[int]
+
 @router.delete("/scans/{scan_id}")
-def delete_scan(scan_id: int, db: Session = Depends(get_db)):
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def delete_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.user_id == current_user.id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan record not found.")
     db.delete(scan)
     db.commit()
     return {"success": True, "message": f"Scan #{scan_id} deleted successfully."}
+
+@router.post("/scans/bulk-delete")
+def bulk_delete_scans(payload: BulkDeleteScansRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not payload.scan_ids:
+        return {"success": True, "deleted_count": 0, "message": "No scans selected"}
+    deleted_count = db.query(Scan).filter(
+        Scan.id.in_(payload.scan_ids),
+        Scan.user_id == current_user.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "deleted_count": deleted_count, "message": f"Deleted {deleted_count} scan(s) successfully."}
 

@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.user import User
 from typing import Optional
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut, ProfileUpdateRequest
-from app.security.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from app.security.auth import get_password_hash, verify_password, create_access_token, get_current_user, get_optional_user
 from app.notifications.sms_service import validate_phone_number
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -110,10 +110,17 @@ def get_profile(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     return UserOut.model_validate(user)
 
 @router.put("/profile", response_model=UserOut)
-def update_profile(payload: ProfileUpdateRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+def update_profile(
+    payload: ProfileUpdateRequest,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user)
+):
     user = None
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
+    elif current_user:
+        user = current_user
     if not user:
         user = db.query(User).first()
     if not user:
