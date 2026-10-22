@@ -234,13 +234,28 @@ def send_whatsapp_report(payload: dict):
         "Content-Type": "application/json"
     }
 
-    body = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": clean_phone.replace("+", ""),
-        "type": "text",
-        "text": {"body": summary_text}
-    }
+    pdf_url = payload.get("pdf_url") or payload.get("download_url")
+
+    if pdf_url and pdf_url.startswith("http"):
+        body = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone.replace("+", ""),
+            "type": "document",
+            "document": {
+                "link": pdf_url,
+                "caption": summary_text,
+                "filename": f"PulseVision_Report_{user_name.replace(' ', '_')}.pdf"
+            }
+        }
+    else:
+        body = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone.replace("+", ""),
+            "type": "text",
+            "text": {"body": summary_text}
+        }
 
     try:
         with httpx.Client(timeout=15.0) as client:

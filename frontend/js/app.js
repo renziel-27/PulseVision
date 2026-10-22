@@ -321,11 +321,10 @@ function initNavigation() {
   });
 
   // Action Buttons
-  document.getElementById('btn-share-whatsapp')?.addEventListener('click', shareReportViaWhatsApp);
+  document.getElementById('btn-share-whatsapp')?.addEventListener('click', () => shareReportViaWhatsApp());
   document.getElementById('btn-save-report')?.addEventListener('click', saveCurrentReport);
   document.getElementById('btn-reset-session')?.addEventListener('click', resetSession);
   document.getElementById('btn-download-pdf')?.addEventListener('click', downloadCurrentReportPDF);
-  document.getElementById('btn-send-sms')?.addEventListener('click', triggerSmsDispatch);
 
   // Reports Filter & Refresh
   document.getElementById('report-search-input')?.addEventListener('input', () => {
@@ -3488,19 +3487,56 @@ async function saveCurrentReport() {
 }
 
 async function shareReportViaWhatsApp(scanId = null) {
-  let downloadUrl = AppState.lastSavedDownloadUrl;
-  let fileName = AppState.lastSavedFileName || `PulseVision_Report.pdf`;
-  const user = AppState.currentUser || { name: 'Patient', phone: '' };
-  let targetPhone = user.phone || '';
-  if (!targetPhone) {
-    const entered = window.prompt("Enter recipient WhatsApp number with country code (e.g. +1234567890), or leave blank to select contact in WhatsApp:", "");
-    if (entered !== null) targetPhone = entered.trim();
+  // If scan is not completed and no scanId provided, notify and abort
+  if (!scanId && (!AppState.scanCompleted || AppState.currentBPM <= 0)) {
+    showToast("Please complete a detection scan (≥ 10s) before sharing via WhatsApp.", "warning");
+    return;
   }
 
+  // 1. Pre-open WhatsApp target tab synchronously so browser popup blockers NEVER block it!
+  let waWindow = null;
   try {
-    // 1. If scanId is specified or report not yet saved, generate official ReportLab PDF
+    waWindow = window.open('about:blank', '_blank');
+    if (waWindow && waWindow.document) {
+      waWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>PulseVision AI • Connecting to WhatsApp...</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body { background: #0b141a; color: #e9edef; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+            .box { text-align: center; max-width: 440px; padding: 2.5rem 2rem; background: rgba(255,255,255,0.04); border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+            .spinner { width: 44px; height: 44px; border: 4px solid rgba(34, 197, 94, 0.2); border-top-color: #22c55e; border-radius: 50%; animation: spin 0.9s infinite linear; margin: 0 auto 18px; }
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+            h3 { color: #22c55e; margin: 0 0 10px 0; font-size: 1.25rem; }
+            p { color: #8696a0; font-size: 0.92rem; line-height: 1.6; margin: 0; }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <div class="spinner"></div>
+            <h3>Generating Clinical PDF Report...</h3>
+            <p>Connecting to WhatsApp with your official biometric health summary and PDF report certificate.</p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+  } catch (err) {
+    console.warn("Could not pre-open window:", err);
+  }
+
+  const user = AppState.currentUser || { name: 'Participant', phone: '' };
+  const targetPhone = (user.phone || '').trim();
+
+  try {
+    let downloadUrl = AppState.lastSavedDownloadUrl;
+    let fileName = AppState.lastSavedFileName || `PulseVision_Report.pdf`;
+
+    // 2. Generate or retrieve official ReportLab PDF
     if (scanId) {
-      showToast("Preparing clinical PDF report for WhatsApp...", "info");
+      showToast("Generating official clinical PDF report...", "info");
       const res = await fetch(`${API_BASE}/api/reports/save`, {
         method: 'POST',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -3511,95 +3547,130 @@ async function shareReportViaWhatsApp(scanId = null) {
         downloadUrl = data.download_url;
         fileName = data.file_name || `PulseVision_Report_Scan_${scanId}.pdf`;
       }
-    } else {
-      if (!AppState.scanCompleted || AppState.currentBPM <= 0) {
-        showToast("Please complete a scan before sharing via WhatsApp.", "warning");
-        return;
-      }
-      if (!downloadUrl) {
-        showToast("Generating official clinical PDF report...", "info");
-        const res = await fetch(`${API_BASE}/api/reports/save`, {
-          method: 'POST',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({
-            user_id: user.id || 1,
-            bpm: AppState.currentBPM,
-            confidence: AppState.confidence || 88.0,
-            stress_level: AppState.stressData?.stressLevel || "Low (Relaxed)",
-            fatigue_level: AppState.fatigueData?.fatigueLevel || "Normal",
-            ear_value: AppState.fatigueData?.ear || 0.28,
-            signal_quality: `${Math.round((AppState.sqi || 0.88) * 100)}% (Optimal)`,
-            algorithm_used: 'CONSENSUS_ENSEMBLE',
-            classification: AppState.classification || "Normal Range"
-          })
-        });
-        const data = await res.json();
-        if (data.success && data.download_url) {
-          downloadUrl = data.download_url;
-          fileName = data.file_name || `PulseVision_Report.pdf`;
-          AppState.lastSavedReportId = data.id;
-          AppState.lastSavedDownloadUrl = data.download_url;
-          AppState.lastSavedFileName = data.file_name;
-        }
+    } else if (!downloadUrl) {
+      showToast("Generating official clinical PDF report...", "info");
+      const res = await fetch(`${API_BASE}/api/reports/save`, {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          user_id: user.id || 1,
+          bpm: AppState.currentBPM,
+          confidence: AppState.confidence || 88.0,
+          stress_level: AppState.stressData?.stressLevel || "Low (Relaxed)",
+          fatigue_level: AppState.fatigueData?.fatigueLevel || "Normal",
+          ear_value: AppState.fatigueData?.ear || 0.28,
+          signal_quality: `${Math.round((AppState.sqi || 0.88) * 100)}% (Optimal)`,
+          algorithm_used: 'CONSENSUS_ENSEMBLE',
+          classification: AppState.classification || "Normal Range"
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.download_url) {
+        downloadUrl = data.download_url;
+        fileName = data.file_name || `PulseVision_Report.pdf`;
+        AppState.lastSavedReportId = data.id;
+        AppState.lastSavedDownloadUrl = data.download_url;
+        AppState.lastSavedFileName = data.file_name;
       }
     }
 
     if (!downloadUrl) {
-      showToast("Could not generate clinical PDF report.", "error");
+      if (waWindow && !waWindow.closed) waWindow.close();
+      showToast("Failed to generate clinical PDF report.", "error");
       return;
     }
 
-    // 2. Fetch actual PDF binary file
-    showToast("Preparing PDF document...", "info");
-    const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `${API_BASE}${downloadUrl}`;
-    const pdfRes = await fetch(fullUrl, { headers: getAuthHeaders() });
-    if (!pdfRes.ok) throw new Error("Could not download generated PDF file.");
-    const pdfBlob = await pdfRes.blob();
-    const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+    // 3. Build full absolute download link for the PDF
+    const origin = window.location.origin;
+    const fullPdfUrl = downloadUrl.startsWith('http') ? downloadUrl : `${origin}${downloadUrl}`;
 
-    // 3. Web Share API with File (Native OS share sheet on iOS, Android, macOS, Windows)
-    if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-      await navigator.share({
-        title: 'PulseVision AI Clinical Health Report',
-        text: `PulseVision AI Health Assessment Report for ${user.name}.`,
-        files: [pdfFile]
-      });
-      showToast("Report shared! Select WhatsApp in the share menu.", "success");
-      return;
+    // 4. Download PDF file locally so user has the physical file ready to attach
+    try {
+      const pdfRes = await fetch(fullPdfUrl, { headers: getAuthHeaders() });
+      if (pdfRes.ok) {
+        const pdfBlob = await pdfRes.blob();
+        const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+        // If mobile device supports native file sharing to WhatsApp:
+        if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+          if (waWindow && !waWindow.closed) waWindow.close();
+          try {
+            await navigator.share({
+              title: 'PulseVision AI Clinical Health Report',
+              text: `PulseVision AI Health Assessment Report for ${user.name}.\nOfficial PDF Document: ${fullPdfUrl}`,
+              files: [pdfFile]
+            });
+            showToast("Clinical PDF shared to WhatsApp!", "success");
+            return;
+          } catch (shareErr) {
+            if (shareErr.name === 'AbortError') return;
+          }
+        }
+
+        // Trigger automatic download of the PDF file to user's device
+        const blobUrl = window.URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+      }
+    } catch (dlErr) {
+      console.warn("Could not auto-download PDF to disk:", dlErr);
     }
 
-    // 4. Desktop Fallback: Automatically download the PDF and launch WhatsApp Web
-    const blobUrl = window.URL.createObjectURL(pdfBlob);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(blobUrl);
-
-    const cleanDigits = targetPhone.replace(/[^0-9]/g, '');
+    // 5. Construct comprehensive, clean clinical WhatsApp message
     let bpmDisplay = Math.round(AppState.currentBPM || 72);
+    let classDisplay = AppState.classification || "Normal Range";
+    let stressDisplay = AppState.stressData?.stressLevel || "Low (Relaxed)";
+    let fatigueDisplay = AppState.fatigueData?.fatigueLevel || "Normal";
+    let sqiDisplay = `${Math.round((AppState.sqi || 0.90) * 100)}% (Optimal)`;
+
     if (scanId && AppState.userReports) {
       const match = AppState.userReports.find(r => r.id === scanId);
-      if (match && match.bpm) bpmDisplay = Math.round(match.bpm);
+      if (match) {
+        if (match.bpm) bpmDisplay = Math.round(match.bpm);
+        if (match.classification) classDisplay = match.classification;
+        if (match.stress_level) stressDisplay = match.stress_level;
+        if (match.fatigue_level) fatigueDisplay = match.fatigue_level;
+        if (match.signal_quality) sqiDisplay = match.signal_quality;
+      }
     }
-    const msg = `*PulseVision AI — Biometric Health Assessment Report*\n` +
-      `Patient: ${user.name}\n` +
-      `Heart Rate: ${bpmDisplay} BPM\n` +
-      `Signal Quality: ${Math.round((AppState.sqi || 0.9) * 100)}%\n\n` +
-      `📎 *Attached Document:* ${fileName}\n` +
-      `(Official PDF report downloaded — please attach it into this WhatsApp chat.)`;
 
+    const msg = 
+      `🩺 *PULSEVISION AI — CLINICAL ASSESSMENT REPORT*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `👤 *Patient:* ${user.name || 'Participant'}\n` +
+      `❤️ *Consensus Heart Rate:* ${bpmDisplay} BPM (${classDisplay})\n` +
+      `🌿 *Autonomic Stress:* ${stressDisplay}\n` +
+      `👁️ *Ocular Alertness:* ${fatigueDisplay}\n` +
+      `📊 *Signal Quality (SQI):* ${sqiDisplay}\n\n` +
+      `📄 *OFFICIAL CLINICAL PDF DOCUMENT:*\n` +
+      `${fullPdfUrl}\n\n` +
+      `📎 *Attached Document:* ${fileName}\n` +
+      `(The official clinical PDF has also been saved to your downloads — drop or attach it directly into this chat.)\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `_PulseVision AI Non-Contact Physiological Monitoring Prototype_`;
+
+    const cleanDigits = targetPhone.replace(/[^0-9]/g, '');
     const waUrl = cleanDigits
       ? `https://api.whatsapp.com/send?phone=${cleanDigits}&text=${encodeURIComponent(msg)}`
       : `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-    window.open(waUrl, '_blank');
-    showToast("PDF report downloaded! Drop or attach it into your WhatsApp chat.", "success");
+
+    // 6. Navigate to WhatsApp without popup blocker issues
+    if (waWindow && !waWindow.closed) {
+      waWindow.location.href = waUrl;
+    } else {
+      window.open(waUrl, '_blank') || (window.location.href = waUrl);
+    }
+
+    showToast("WhatsApp opened with clinical report & PDF download link!", "success");
   } catch (err) {
-    if (err.name === 'AbortError') return; // User closed share sheet
-    console.error("WhatsApp PDF sharing error:", err);
-    showToast("Could not share PDF: " + err.message, "error");
+    if (waWindow && !waWindow.closed) waWindow.close();
+    console.error("WhatsApp error:", err);
+    showToast("Could not prepare WhatsApp report: " + err.message, "error");
   }
 }
 window.shareReportViaWhatsApp = shareReportViaWhatsApp;
@@ -3997,9 +4068,6 @@ function renderReportsList(scans, reports = null) {
         </button>
         <button class="btn btn-whatsapp btn-sm" onclick="shareReportViaWhatsApp(${s.id})" title="Share Clinical PDF via WhatsApp">
           💬 WhatsApp
-        </button>
-        <button class="btn btn-sms btn-sm" onclick="sendReportViaSms(${s.id}, ${s.bpm}, '${escapeHtml(s.classification || 'Normal Range')}', '${escapeHtml(s.stress_level || 'Low (Relaxed)')}', '${escapeHtml(s.fatigue_level || 'Normal')}')" title="Dispatch Clinical Summary via SMS">
-          📱 SMS
         </button>
         <button class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4);" onclick="deleteScanRecord(${s.id})" title="Delete scan record">
           🗑️ Delete
