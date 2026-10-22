@@ -325,7 +325,7 @@ function initNavigation() {
   document.getElementById('btn-save-report')?.addEventListener('click', saveCurrentReport);
   document.getElementById('btn-reset-session')?.addEventListener('click', resetSession);
   document.getElementById('btn-download-pdf')?.addEventListener('click', downloadCurrentReportPDF);
-  document.getElementById('btn-send-email')?.addEventListener('click', triggerEmailDispatch);
+  document.getElementById('btn-send-sms')?.addEventListener('click', triggerSmsDispatch);
 
   // Reports Filter & Refresh
   document.getElementById('report-search-input')?.addEventListener('input', () => {
@@ -3491,7 +3491,11 @@ async function shareReportViaWhatsApp(scanId = null) {
   let downloadUrl = AppState.lastSavedDownloadUrl;
   let fileName = AppState.lastSavedFileName || `PulseVision_Report.pdf`;
   const user = AppState.currentUser || { name: 'Patient', phone: '' };
-  const targetPhone = user.phone || '';
+  let targetPhone = user.phone || '';
+  if (!targetPhone) {
+    const entered = window.prompt("Enter recipient WhatsApp number with country code (e.g. +1234567890), or leave blank to select contact in WhatsApp:", "");
+    if (entered !== null) targetPhone = entered.trim();
+  }
 
   try {
     // 1. If scanId is specified or report not yet saved, generate official ReportLab PDF
@@ -3575,7 +3579,11 @@ async function shareReportViaWhatsApp(scanId = null) {
     window.URL.revokeObjectURL(blobUrl);
 
     const cleanDigits = targetPhone.replace(/[^0-9]/g, '');
-    const bpmDisplay = Math.round(AppState.currentBPM || 72);
+    let bpmDisplay = Math.round(AppState.currentBPM || 72);
+    if (scanId && AppState.userReports) {
+      const match = AppState.userReports.find(r => r.id === scanId);
+      if (match && match.bpm) bpmDisplay = Math.round(match.bpm);
+    }
     const msg = `*PulseVision AI — Biometric Health Assessment Report*\n` +
       `Patient: ${user.name}\n` +
       `Heart Rate: ${bpmDisplay} BPM\n` +
@@ -3990,6 +3998,9 @@ function renderReportsList(scans, reports = null) {
         <button class="btn btn-whatsapp btn-sm" onclick="shareReportViaWhatsApp(${s.id})" title="Share Clinical PDF via WhatsApp">
           💬 WhatsApp
         </button>
+        <button class="btn btn-sms btn-sm" onclick="sendReportViaSms(${s.id}, ${s.bpm}, '${escapeHtml(s.classification || 'Normal Range')}', '${escapeHtml(s.stress_level || 'Low (Relaxed)')}', '${escapeHtml(s.fatigue_level || 'Normal')}')" title="Dispatch Clinical Summary via SMS">
+          📱 SMS
+        </button>
         <button class="btn btn-outline btn-sm" style="color: #ff2a6d; border-color: rgba(255, 42, 109, 0.4);" onclick="deleteScanRecord(${s.id})" title="Delete scan record">
           🗑️ Delete
         </button>
@@ -4107,88 +4118,115 @@ window.deleteScanRecord = deleteScanRecord;
 window.fetchScansHistory = fetchUserReports;
 
 /* --------------------------------------------------------------------------
-   Email & SMS Notification Gateways
+   SMS & WhatsApp Dispatch Gateways
    -------------------------------------------------------------------------- */
-async function triggerEmailDispatch() {
+async function triggerSmsDispatch() {
   if (!AppState.scanCompleted || AppState.currentBPM <= 0) {
-    showToast("Please complete a detection scan (≥ 10s) before dispatching email.", "warning");
+    showToast("Please complete a detection scan (≥ 10s) before dispatching SMS.", "warning");
     return;
   }
 
-  let email = AppState.currentUser?.email;
-  if (!email || email === "participant@pulsevision.local") {
-    email = window.prompt("Enter recipient email address for biometric report:", email || "");
+  let phone = AppState.currentUser?.phone || '';
+  if (!phone || phone.trim().length < 7) {
+    const entered = window.prompt("Enter recipient phone number for SMS health report (e.g. +1234567890 or 10-digit number):", phone || "");
+    if (entered === null) {
+      showToast("SMS dispatch cancelled.", "info");
+      return;
+    }
+    phone = entered.trim();
   }
-  if (!email) {
-    showToast("Email dispatch cancelled (no recipient provided).", "info");
+  if (!phone) {
+    showToast("SMS dispatch cancelled (no phone number provided).", "info");
     return;
   }
 
+  const cleanPhone = phone.trim();
+  const userName = AppState.currentUser?.name || "Participant";
   const bpm = AppState.currentBPM;
 
   try {
-    showToast(`Sending Health Assessment Report to ${email}...`, 'info');
-    const res = await fetch(`${API_BASE}/api/send-email`, {
+    showToast(`Dispatching Health Assessment Report via SMS to ${cleanPhone}...`, 'info');
+    const res = await fetch(`${API_BASE}/api/send-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: email,
-        user_name: AppState.currentUser?.name || "Participant",
+        phone: cleanPhone,
+        user_name: userName,
         bpm: bpm,
-        classification: AppState.classification,
-        stress_level: AppState.stressData.stressLevel,
-        fatigue_level: AppState.fatigueData.fatigueLevel,
-        ear_value: AppState.fatigueData.ear,
-        sqi: `${Math.round((AppState.sqi || 0.90) * 100)}% (Optimal)`
+        classification: AppState.classification || "Normal Range",
+        stress_level: AppState.stressData?.stressLevel || "Low (Relaxed)",
+        fatigue_level: AppState.fatigueData?.fatigueLevel || "Normal"
       })
     });
     const data = await res.json();
     if (data.success) {
-      showToast(data.message || `Health Report successfully emailed to ${email}!`, 'success');
-    } else if (data.configured === false) {
-      showToast(data.error || "SMTP credentials not configured on server (.env).", 'warning');
+      showToast(`SMS report successfully dispatched to ${cleanPhone}! (${data.status || 'Delivered'})`, 'success');
+      if (AppState.currentUser && !AppState.currentUser.phone) {
+        AppState.currentUser.phone = cleanPhone;
+        updateUserUI();
+      }
     } else {
-      showToast(data.error || 'Failed to dispatch email', 'error');
+      showToast(data.error || "Failed to dispatch SMS.", 'error');
     }
   } catch (err) {
-    showToast('Mail Gateway connection error', 'error');
+    console.error("SMS dispatch error:", err);
+    showToast("SMS Gateway connection error.", 'error');
   }
 }
+window.triggerSmsDispatch = triggerSmsDispatch;
 
-window.sendSpecificEmail = async function(email, name, bpm, classification, stress, fatigue) {
-  const targetEmail = email || (AppState.currentUser ? AppState.currentUser.email : '');
-  if (!targetEmail) {
-    showToast("No email address found. Please enter your email in account settings.", "error");
+window.sendReportViaSms = async function(scanId, bpm, classification, stress, fatigue) {
+  let phone = AppState.currentUser?.phone || '';
+  if (!phone || phone.trim().length < 7) {
+    const entered = window.prompt("Enter recipient phone number for SMS health report (e.g. +1234567890):", phone || "");
+    if (entered === null) {
+      showToast("SMS dispatch cancelled.", "info");
+      return;
+    }
+    phone = entered.trim();
+  }
+  if (!phone) {
+    showToast("SMS dispatch cancelled (no phone number provided).", "info");
     return;
   }
 
+  const cleanPhone = phone.trim();
+  const userName = AppState.currentUser?.name || "Participant";
+
   try {
-    showToast(`Emailing health summary to ${targetEmail}...`, 'info');
-    const res = await fetch(`${API_BASE}/api/send-email`, {
+    showToast(`Sending SMS summary to ${cleanPhone}...`, 'info');
+    const res = await fetch(`${API_BASE}/api/send-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: targetEmail,
-        user_name: name || (AppState.currentUser ? AppState.currentUser.name : 'Patient'),
-        bpm: bpm,
-        classification: classification,
-        stress_level: stress,
-        fatigue_level: fatigue,
-        ear_value: 0.28,
-        sqi: 92
+        phone: cleanPhone,
+        user_name: userName,
+        bpm: parseFloat(bpm) || 72.0,
+        classification: classification || "Normal Range",
+        stress_level: stress || "Low (Relaxed)",
+        fatigue_level: fatigue || "Normal"
       })
     });
     const data = await res.json();
     if (data.success) {
-      showToast(data.message || `Health Report sent to ${targetEmail}!`, 'success');
-    } else if (data.configured === false) {
-      showToast(data.error || "SMTP credentials not configured on server (.env).", 'warning');
+      showToast(`SMS report successfully dispatched to ${cleanPhone}! (${data.status || 'Delivered'})`, 'success');
     } else {
-      showToast(data.error || 'Failed to dispatch email', 'error');
+      showToast(data.error || "Failed to dispatch SMS.", 'error');
     }
   } catch (err) {
-    showToast('Mail Gateway error', 'error');
+    showToast("SMS Gateway connection error.", 'error');
   }
+};
+
+// Deprecated email handlers smoothly routed to SMS gateway
+async function triggerEmailDispatch() {
+  showToast("Email gateway replaced with SMS & WhatsApp gateways.", "info");
+  return triggerSmsDispatch();
+}
+window.triggerEmailDispatch = triggerEmailDispatch;
+window.sendSpecificEmail = async function(email, name, bpm, classification, stress, fatigue) {
+  showToast("Email gateway replaced with SMS & WhatsApp gateways.", "info");
+  return window.sendSpecificWhatsApp(null, name, bpm, classification, stress, fatigue);
 };
 
 window.sendSpecificWhatsApp = async function(phone, name, bpm, classification, stress, fatigue) {
